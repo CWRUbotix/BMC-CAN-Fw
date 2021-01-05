@@ -1,0 +1,1 @@
+{"rustc":10050954291966789357,"features":"[\"ram_access_1x16\"]","target":10429514197457385088,"profile":8488886567899228914,"path":11625157291038273370,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"debug/.fingerprint/stm32-usbd-c3a2ed2822dfdea5/dep-build-script-build-script-build"}}],"rustflags":[],"metadata":10978043073170726465,"config":0}

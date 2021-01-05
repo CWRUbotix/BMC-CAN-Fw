@@ -1,0 +1,1 @@
+{"rustc":10050954291966789357,"features":"[]","target":12389084935491522239,"profile":1824481581106907554,"path":4438843963446016502,"deps":[],"local":[{"Precalculated":"0.13.2"}],"rustflags":["-C","link-arg=-Tlink.x","-C","link-arg=-Tdefmt.x"],"metadata":13114019227619237509,"config":0}

@@ -1,0 +1,1 @@
+/home/bscholar/dev/cwrubotix/bmc-can-rs/target/thumbv7m-none-eabi/debug/bmc-can-rs: /home/bscholar/dev/cwrubotix/bmc-can-rs/build.rs /home/bscholar/dev/cwrubotix/bmc-can-rs/memory.x /home/bscholar/dev/cwrubotix/bmc-can-rs/src/main.rs build.rs link.x.in memory.x src/stm32f103/device.x

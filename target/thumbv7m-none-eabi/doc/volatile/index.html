@@ -1,0 +1,33 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="API documentation for the Rust `volatile` crate."><meta name="keywords" content="rust, rustlang, rust-lang, volatile"><title>volatile - Rust</title><link rel="stylesheet" type="text/css" href="../normalize.css"><link rel="stylesheet" type="text/css" href="../rustdoc.css" id="mainThemeStyle"><link rel="stylesheet" type="text/css" href="../light.css"  id="themeStyle"><link rel="stylesheet" type="text/css" href="../dark.css" disabled ><link rel="stylesheet" type="text/css" href="../ayu.css" disabled ><script id="default-settings"></script><script src="../storage.js"></script><noscript><link rel="stylesheet" href="../noscript.css"></noscript><link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="alternate icon" type="image/png" href="../favicon-16x16.png">
+<link rel="alternate icon" type="image/png" href="../favicon-32x32.png"><style type="text/css">#crate-search{background-image:url("../down-arrow.svg");}</style></head><body class="rustdoc mod"><!--[if lte IE 8]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="sidebar-menu">&#9776;</div><a href='../volatile/index.html'><div class='logo-container rust-logo'><img src='../rust-logo.png' alt='logo'></div></a><p class="location">Crate volatile</p><div class="block version"><p>Version 0.3.0</p></div><div class="sidebar-elems"><a id="all-types" href="all.html"><p>See all volatile's items</p></a><div class="block items"><ul><li><a href="#structs">Structs</a></li><li><a href="#types">Type Definitions</a></li></ul></div><p class="location"></p><script>window.sidebarCurrent = {name: "volatile", ty: "mod", relpath: "../"};</script></div></nav><div class="theme-picker"><button id="theme-picker" aria-label="Pick another theme!" aria-haspopup="menu"><img src="../brush.svg" width="18" alt="Pick another theme!"></button><div id="theme-choices" role="menu"></div></div><script src="../theme.js"></script><nav class="sub"><form class="search-form"><div class="search-container"><div><select id="crate-search"><option value="All crates">All crates</option></select><input class="search-input" name="search" disabled autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"></div><button type="button" class="help-button">?</button>
+                <a id="settings-menu" href="../settings.html"><img src="../wheel.svg" width="18" alt="Change settings"></a></div></form></nav><section id="main" class="content"><h1 class="fqn"><span class="out-of-band"><span id="render-detail"><a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">[<span class="inner">&#x2212;</span>]</a></span><a class="srclink" href="../src/volatile/lib.rs.html#1-310" title="goto source code">[src]</a></span><span class="in-band">Crate <a class="mod" href="">volatile</a></span></h1><div class="docblock"><p>Provides wrapper types <code>Volatile</code>, <code>ReadOnly</code>, <code>WriteOnly</code>, <code>ReadWrite</code>, which wrap any copy-able type and allows for
+volatile memory access to wrapped value. Volatile memory accesses are never optimized away by
+the compiler, and are useful in many low-level systems programming and concurrent contexts.</p>
+<p>The wrapper types <em>do not</em> enforce any atomicity guarantees; to also get atomicity, consider
+looking at the <code>Atomic</code> wrapper type found in <code>libcore</code> or <code>libstd</code>.</p>
+<p>These wrappers do not depend on the standard library and never panic.</p>
+<h1 id="dealing-with-volatile-pointers" class="section-header"><a href="#dealing-with-volatile-pointers">Dealing with Volatile Pointers</a></h1>
+<p>Frequently, one may have to deal with volatile pointers, eg, writes to specific memory
+locations. The canonical way to solve this is to cast the pointer to a volatile wrapper
+directly, eg:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered">
+<span class="kw">use</span> <span class="ident">volatile</span>::<span class="ident">Volatile</span>;
+
+<span class="kw">let</span> <span class="ident">mut_ptr</span> <span class="op">=</span> <span class="number">0xFEE00000</span> <span class="kw">as</span> <span class="kw-2">*</span><span class="kw-2">mut</span> <span class="ident">u32</span>;
+
+<span class="kw">let</span> <span class="ident">volatile_ptr</span> <span class="op">=</span> <span class="ident">mut_ptr</span> <span class="kw">as</span> <span class="kw-2">*</span><span class="kw-2">mut</span> <span class="ident">Volatile</span><span class="op">&lt;</span><span class="ident">u32</span><span class="op">&gt;</span>;</pre></div>
+<p>and then perform operations on the pointer as usual in a volatile way. This method works as all
+of the volatile wrapper types are the same size as their contained values.</p>
+</div><h2 id="structs" class="section-header"><a href="#structs">Structs</a></h2>
+<table><tr class="module-item"><td><a class="struct" href="struct.ReadOnly.html" title="volatile::ReadOnly struct">ReadOnly</a></td><td class="docblock-short"><p>A volatile wrapper which only allows read operations.</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.Volatile.html" title="volatile::Volatile struct">Volatile</a></td><td class="docblock-short"><p>A wrapper type around a volatile variable, which allows for volatile reads and writes
+to the contained value. The stored type needs to be <code>Copy</code>, as volatile reads and writes
+take and return copies of the value.</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.WriteOnly.html" title="volatile::WriteOnly struct">WriteOnly</a></td><td class="docblock-short"><p>A volatile wrapper which only allows write operations.</p>
+</td></tr></table><h2 id="types" class="section-header"><a href="#types">Type Definitions</a></h2>
+<table><tr class="module-item"><td><a class="type" href="type.ReadWrite.html" title="volatile::ReadWrite type">ReadWrite</a></td><td class="docblock-short"><p>A volatile wrapper which allows both read and write operations;
+functionally equivalent to the <code>Volatile</code> type, as it is a type
+alias for it.</p>
+</td></tr></table></section><section id="search" class="content hidden"></section><section class="footer"></section><script>window.rootPath = "../";window.currentCrate = "volatile";</script><script src="../main.js"></script><script defer src="../search-index.js"></script></body></html>

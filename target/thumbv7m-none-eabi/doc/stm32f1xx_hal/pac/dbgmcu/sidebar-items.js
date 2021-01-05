@@ -1,0 +1,1 @@
+initSidebarItems({"mod":[["cr","DBGMCU_CR"],["idcode","DBGMCU_IDCODE"]],"struct":[["RegisterBlock","Register block"]],"type":[["CR","DBGMCU_CR"],["IDCODE","DBGMCU_IDCODE"]]});

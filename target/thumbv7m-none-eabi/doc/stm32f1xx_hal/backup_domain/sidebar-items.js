@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["BackupDomain","The existence of this struct indicates that writing to the the backup domain has been enabled. It is acquired by calling `constrain` on `rcc::Rcc::BKP`"]]});

@@ -1,0 +1,3 @@
+(function() {var implementors = {};
+implementors["stm32f1xx_hal"] = [{"text":"impl MulAssign&lt;u32&gt; for Hertz","synthetic":false,"types":[]},{"text":"impl MulAssign&lt;u32&gt; for KiloHertz","synthetic":false,"types":[]},{"text":"impl MulAssign&lt;u32&gt; for MegaHertz","synthetic":false,"types":[]},{"text":"impl MulAssign&lt;u32&gt; for Bps","synthetic":false,"types":[]}];
+if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["RESET_AW","Reset bit"]],"struct":[["RESET_W","Write proxy for field `RESET`"]],"type":[["W","Writer for register CR"]]});

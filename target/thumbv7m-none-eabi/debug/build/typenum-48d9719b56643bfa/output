@@ -1,0 +1,2 @@
+cargo:rustc-env=TYPENUM_BUILD_CONSTS=/home/bscholar/dev/cwrubotix/bmc-can-rs/target/thumbv7m-none-eabi/debug/build/typenum-48d9719b56643bfa/out/consts.rs
+cargo:rustc-env=TYPENUM_BUILD_OP=/home/bscholar/dev/cwrubotix/bmc-can-rs/target/thumbv7m-none-eabi/debug/build/typenum-48d9719b56643bfa/out/op.rs

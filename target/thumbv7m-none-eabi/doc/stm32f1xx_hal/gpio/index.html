@@ -1,0 +1,99 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="API documentation for the Rust `gpio` mod in crate `stm32f1xx_hal`."><meta name="keywords" content="rust, rustlang, rust-lang, gpio"><title>stm32f1xx_hal::gpio - Rust</title><link rel="stylesheet" type="text/css" href="../../normalize.css"><link rel="stylesheet" type="text/css" href="../../rustdoc.css" id="mainThemeStyle"><link rel="stylesheet" type="text/css" href="../../light.css"  id="themeStyle"><link rel="stylesheet" type="text/css" href="../../dark.css" disabled ><link rel="stylesheet" type="text/css" href="../../ayu.css" disabled ><script id="default-settings"></script><script src="../../storage.js"></script><noscript><link rel="stylesheet" href="../../noscript.css"></noscript><link rel="icon" type="image/svg+xml" href="../../favicon.svg">
+<link rel="alternate icon" type="image/png" href="../../favicon-16x16.png">
+<link rel="alternate icon" type="image/png" href="../../favicon-32x32.png"><style type="text/css">#crate-search{background-image:url("../../down-arrow.svg");}</style></head><body class="rustdoc mod"><!--[if lte IE 8]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="sidebar-menu">&#9776;</div><a href='../../stm32f1xx_hal/index.html'><div class='logo-container rust-logo'><img src='../../rust-logo.png' alt='logo'></div></a><p class="location">Module gpio</p><div class="sidebar-elems"><div class="block items"><ul><li><a href="#modules">Modules</a></li><li><a href="#structs">Structs</a></li><li><a href="#enums">Enums</a></li><li><a href="#traits">Traits</a></li></ul></div><p class="location"><a href="../index.html">stm32f1xx_hal</a></p><script>window.sidebarCurrent = {name: "gpio", ty: "mod", relpath: "../"};</script><script defer src="../sidebar-items.js"></script></div></nav><div class="theme-picker"><button id="theme-picker" aria-label="Pick another theme!" aria-haspopup="menu"><img src="../../brush.svg" width="18" alt="Pick another theme!"></button><div id="theme-choices" role="menu"></div></div><script src="../../theme.js"></script><nav class="sub"><form class="search-form"><div class="search-container"><div><select id="crate-search"><option value="All crates">All crates</option></select><input class="search-input" name="search" disabled autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"></div><button type="button" class="help-button">?</button>
+                <a id="settings-menu" href="../../settings.html"><img src="../../wheel.svg" width="18" alt="Change settings"></a></div></form></nav><section id="main" class="content"><h1 class="fqn"><span class="out-of-band"><span id="render-detail"><a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">[<span class="inner">&#x2212;</span>]</a></span><a class="srclink" href="../../src/stm32f1xx_hal/gpio.rs.html#1-1332" title="goto source code">[src]</a></span><span class="in-band">Module <a href="../index.html">stm32f1xx_hal</a>::<wbr><a class="mod" href="">gpio</a></span></h1><div class="docblock"><h1 id="general-purpose-ios" class="section-header"><a href="#general-purpose-ios">General Purpose I/Os</a></h1>
+<p>The GPIO pins are organised into groups of 16 pins which can be accessed through the
+<code>gpioa</code>, <code>gpiob</code>... modules. To get access to the pins, you first need to convert them into a
+HAL designed struct from the <code>pac</code> struct using the <a href="trait.GpioExt.html#tymethod.split">split</a> function.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered">
+<span class="comment">// Acquire the GPIOC peripheral</span>
+<span class="comment">// NOTE: `dp` is the device peripherals from the `PAC` crate</span>
+<span class="kw">let</span> <span class="kw-2">mut</span> <span class="ident">gpioa</span> <span class="op">=</span> <span class="ident">dp</span>.<span class="ident">GPIOA</span>.<span class="ident">split</span>(<span class="kw-2">&amp;</span><span class="kw-2">mut</span> <span class="ident">rcc</span>.<span class="ident">apb2</span>);</pre></div>
+<p>See the documentation for <a href="../rcc/struct.APB2.html">rcc::APB2</a> for details about the input parameter to
+<code>split</code>.</p>
+<p>This gives you a struct containing two control registers <code>crl</code> and <code>crh</code>, and all the pins
+<code>px0..px15</code>. These structs are what you use to interract with the pins to change their modes,
+or their inputs or outputs. For example, to set <code>pa5</code> high, you would call</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered">
+<span class="kw">let</span> <span class="ident">output</span> <span class="op">=</span> <span class="ident">gpioa</span>.<span class="ident">pa5</span>.<span class="ident">into_push_pull_output</span>(<span class="kw-2">&amp;</span><span class="kw-2">mut</span> <span class="ident">gpioa</span>.<span class="ident">crl</span>);
+<span class="ident">output</span>.<span class="ident">set_high</span>();</pre></div>
+<p>Each GPIO pin can be set to various modes:</p>
+<ul>
+<li><strong>Alternate</strong>: Pin mode required when the pin is driven by other peripherals</li>
+<li><strong>Dynamic</strong>: Pin mode is selected at runtime. See changing configurations for more details</li>
+<li>Input
+<ul>
+<li><strong>PullUp</strong>: Input connected to high with a weak pull up resistor. Will be high when nothing
+is connected</li>
+<li><strong>PullDown</strong>: Input connected to high with a weak pull up resistor. Will be low when nothing
+is connected</li>
+<li><strong>Floating</strong>: Input not pulled to high or low. Will be undefined when nothing is connected</li>
+</ul>
+</li>
+<li>Output
+<ul>
+<li><strong>PushPull</strong>: Output which either drives the pin high or low</li>
+<li><strong>OpenDrain</strong>: Output which leaves the gate floating, or pulls it do ground in drain
+mode. Can be used as an input in the <code>open</code> configuration</li>
+</ul>
+</li>
+<li><strong>Debugger</strong>: Some pins start out being used by the debugger. A pin in this mode can only be
+used if the <a href="#accessing-pa15-pb3-and-pb14">JTAG peripheral has been turned off</a>.</li>
+</ul>
+<h2 id="changing-modes" class="section-header"><a href="#changing-modes">Changing modes</a></h2>
+<p>The simplest way to change the pin mode is to use the <code>into_&lt;mode&gt;</code> functions. These return a
+new struct with the correct mode that you can use the input or output functions on.</p>
+<p>If you need a more temporary mode change, and can not use the <code>into_&lt;mode&gt;</code> functions for
+ownership reasons, you can use the <code>as_&lt;mode&gt;</code> functions to temporarily change the pin type, do
+some output or input, and then have it change back once done.</p>
+<h3 id="dynamic-mode-change" class="section-header"><a href="#dynamic-mode-change">Dynamic Mode Change</a></h3>
+<p>The above mode change methods guarantee that you can only call input functions when the pin is
+in input mode, and output when in output modes, but can lead to some issues. Therefore, there
+is also a mode where the state is kept track of at runtime, allowing you to change the mode
+often, and without problems with ownership, or references, at the cost of some performance and
+the risk of runtime errors.</p>
+<p>To make a pin dynamic, use the <code>into_dynamic</code> function, and then use the <code>make_&lt;mode&gt;</code> functions to
+change the mode</p>
+<h2 id="accessing-pa15-pb3-and-pb14" class="section-header"><a href="#accessing-pa15-pb3-and-pb14">Accessing PA15, PB3, and PB14</a></h2>
+<p>These pins are used by the JTAG peripheral by default. To use them in your program, you need to
+disable that peripheral. This is done using the <a href="../afio/struct.MAPR.html#method.disable_jtag">afio::MAPR::disable_jtag</a> function</p>
+<h1 id="interfacing-with-v1-traits" class="section-header"><a href="#interfacing-with-v1-traits">Interfacing with v1 traits</a></h1>
+<p><code>embedded-hal</code> has two versions of the digital traits, <code>v2</code> which is used by this crate and
+<code>v1</code> which is deprecated but still used by a lot of drivers.  If you want to use such a driver
+with this crate, you need to convert the digital pins to the <code>v1</code> type.</p>
+<p>This is done using <code>embedded-hal::digital::v1_compat::OldOutputPin</code>. For example:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered">
+<span class="kw">let</span> <span class="ident">nss</span> <span class="op">=</span> <span class="ident">gpioa</span>.<span class="ident">pa4</span>.<span class="ident">into_push_pull_output</span>(<span class="kw-2">&amp;</span><span class="kw-2">mut</span> <span class="ident">gpioa</span>.<span class="ident">crl</span>);
+<span class="kw">let</span> <span class="kw-2">mut</span> <span class="ident">mfrc522</span> <span class="op">=</span> <span class="ident">Mfrc522</span>::<span class="ident">new</span>(<span class="ident">spi</span>, <span class="ident">OldOutputPin</span>::<span class="ident">from</span>(<span class="ident">nss</span>)).<span class="ident">unwrap</span>();</pre></div>
+</div><h2 id="modules" class="section-header"><a href="#modules">Modules</a></h2>
+<table><tr class="module-item"><td><a class="mod" href="gpioa/index.html" title="stm32f1xx_hal::gpio::gpioa mod">gpioa</a></td><td class="docblock-short"><p>GPIO</p>
+</td></tr><tr class="module-item"><td><a class="mod" href="gpiob/index.html" title="stm32f1xx_hal::gpio::gpiob mod">gpiob</a></td><td class="docblock-short"><p>GPIO</p>
+</td></tr><tr class="module-item"><td><a class="mod" href="gpioc/index.html" title="stm32f1xx_hal::gpio::gpioc mod">gpioc</a></td><td class="docblock-short"><p>GPIO</p>
+</td></tr><tr class="module-item"><td><a class="mod" href="gpiod/index.html" title="stm32f1xx_hal::gpio::gpiod mod">gpiod</a></td><td class="docblock-short"><p>GPIO</p>
+</td></tr><tr class="module-item"><td><a class="mod" href="gpioe/index.html" title="stm32f1xx_hal::gpio::gpioe mod">gpioe</a></td><td class="docblock-short"><p>GPIO</p>
+</td></tr></table><h2 id="structs" class="section-header"><a href="#structs">Structs</a></h2>
+<table><tr class="module-item"><td><a class="struct" href="struct.Alternate.html" title="stm32f1xx_hal::gpio::Alternate struct">Alternate</a></td><td class="docblock-short"><p>Alternate function</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.Analog.html" title="stm32f1xx_hal::gpio::Analog struct">Analog</a></td><td class="docblock-short"><p>Analog mode (type state)</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.Debugger.html" title="stm32f1xx_hal::gpio::Debugger struct">Debugger</a></td><td class="docblock-short"><p>Used by the debugger (type state)</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.Floating.html" title="stm32f1xx_hal::gpio::Floating struct">Floating</a></td><td class="docblock-short"><p>Floating input (type state)</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.Input.html" title="stm32f1xx_hal::gpio::Input struct">Input</a></td><td class="docblock-short"><p>Input mode (type state)</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.OpenDrain.html" title="stm32f1xx_hal::gpio::OpenDrain struct">OpenDrain</a></td><td class="docblock-short"><p>Open drain output (type state)</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.Output.html" title="stm32f1xx_hal::gpio::Output struct">Output</a></td><td class="docblock-short"><p>Output mode (type state)</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.PullDown.html" title="stm32f1xx_hal::gpio::PullDown struct">PullDown</a></td><td class="docblock-short"><p>Pulled down input (type state)</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.PullUp.html" title="stm32f1xx_hal::gpio::PullUp struct">PullUp</a></td><td class="docblock-short"><p>Pulled up input (type state)</p>
+</td></tr><tr class="module-item"><td><a class="struct" href="struct.PushPull.html" title="stm32f1xx_hal::gpio::PushPull struct">PushPull</a></td><td class="docblock-short"><p>Push pull output (type state)</p>
+</td></tr></table><h2 id="enums" class="section-header"><a href="#enums">Enums</a></h2>
+<table><tr class="module-item"><td><a class="enum" href="enum.Dynamic.html" title="stm32f1xx_hal::gpio::Dynamic enum">Dynamic</a></td><td class="docblock-short"><p>Tracks the current pin state for dynamic pins</p>
+</td></tr><tr class="module-item"><td><a class="enum" href="enum.Edge.html" title="stm32f1xx_hal::gpio::Edge enum">Edge</a></td><td class="docblock-short"></td></tr><tr class="module-item"><td><a class="enum" href="enum.IOPinSpeed.html" title="stm32f1xx_hal::gpio::IOPinSpeed enum">IOPinSpeed</a></td><td class="docblock-short"><p>Slew rates available for Output and relevant AlternateMode Pins</p>
+</td></tr><tr class="module-item"><td><a class="enum" href="enum.PinModeError.html" title="stm32f1xx_hal::gpio::PinModeError enum">PinModeError</a></td><td class="docblock-short"></td></tr><tr class="module-item"><td><a class="enum" href="enum.Pxx.html" title="stm32f1xx_hal::gpio::Pxx enum">Pxx</a></td><td class="docblock-short"></td></tr><tr class="module-item"><td><a class="enum" href="enum.State.html" title="stm32f1xx_hal::gpio::State enum">State</a></td><td class="docblock-short"></td></tr></table><h2 id="traits" class="section-header"><a href="#traits">Traits</a></h2>
+<table><tr class="module-item"><td><a class="trait" href="trait.Active.html" title="stm32f1xx_hal::gpio::Active trait">Active</a></td><td class="docblock-short"><p>Marker trait for active states.</p>
+</td></tr><tr class="module-item"><td><a class="trait" href="trait.ExtiPin.html" title="stm32f1xx_hal::gpio::ExtiPin trait">ExtiPin</a></td><td class="docblock-short"><p>External Interrupt Pin</p>
+</td></tr><tr class="module-item"><td><a class="trait" href="trait.GpioExt.html" title="stm32f1xx_hal::gpio::GpioExt trait">GpioExt</a></td><td class="docblock-short"><p>Extension trait to split a GPIO peripheral in independent pins and registers</p>
+</td></tr><tr class="module-item"><td><a class="trait" href="trait.Mode.html" title="stm32f1xx_hal::gpio::Mode trait">Mode</a></td><td class="docblock-short"><p>Marker trait for pin mode detection.</p>
+</td></tr><tr class="module-item"><td><a class="trait" href="trait.OutputSpeed.html" title="stm32f1xx_hal::gpio::OutputSpeed trait">OutputSpeed</a></td><td class="docblock-short"><p>Allow setting of the slew rate of an IO pin</p>
+</td></tr><tr class="module-item"><td><a class="trait" href="trait.PinMode.html" title="stm32f1xx_hal::gpio::PinMode trait">PinMode</a></td><td class="docblock-short"><p>NOTE: This trait should ideally be private but must be pub in order to avoid
+complaints from the compiler.</p>
+</td></tr></table></section><section id="search" class="content hidden"></section><section class="footer"></section><script>window.rootPath = "../../";window.currentCrate = "stm32f1xx_hal";</script><script src="../../main.js"></script><script defer src="../../search-index.js"></script></body></html>

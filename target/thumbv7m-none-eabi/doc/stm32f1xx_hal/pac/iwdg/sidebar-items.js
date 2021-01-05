@@ -1,0 +1,1 @@
+initSidebarItems({"mod":[["kr","Key register (IWDG_KR)"],["pr","Prescaler register (IWDG_PR)"],["rlr","Reload register (IWDG_RLR)"],["sr","Status register (IWDG_SR)"]],"struct":[["RegisterBlock","Register block"]],"type":[["KR","Key register (IWDG_KR)"],["PR","Prescaler register (IWDG_PR)"],["RLR","Reload register (IWDG_RLR)"],["SR","Status register (IWDG_SR)"]]});

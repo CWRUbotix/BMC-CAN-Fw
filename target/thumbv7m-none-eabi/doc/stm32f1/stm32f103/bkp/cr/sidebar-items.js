@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["TPAL_A","Tamper pin active level"],["TPE_A","Tamper pin enable"]],"struct":[["TPAL_W","Write proxy for field `TPAL`"],["TPE_W","Write proxy for field `TPE`"]],"type":[["R","Reader of register CR"],["TPAL_R","Reader of field `TPAL`"],["TPE_R","Reader of field `TPE`"],["W","Writer for register CR"]]});

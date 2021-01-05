@@ -1,0 +1,1 @@
+initSidebarItems({"type":[["FIF0COUNT_R","Reader of field `FIF0COUNT`"],["R","Reader of register FIFOCNT"]]});

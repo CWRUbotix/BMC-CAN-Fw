@@ -1,0 +1,2 @@
+cargo:rustc-link-search=/home/bscholar/dev/cwrubotix/bmc-can-rs/target/thumbv7m-none-eabi/debug/build/bmc-can-rs-58e0553ea1c8a711/out
+cargo:rerun-if-changed=memory.x
