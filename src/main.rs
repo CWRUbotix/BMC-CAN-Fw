@@ -15,12 +15,16 @@ use rtic::app;
 use rtic::cyccnt::{Instant, U32Ext as _};
 
 use stm32f1xx_hal::pac::{Interrupt, CAN1};
-use stm32f1xx_hal::{can, gpio, pac};
+use stm32f1xx_hal::{can, pac};
 
 use bxcan::{filter::Mask32, Can, Frame, Id, Rx, StandardId, Tx};
 
 use heapless;
+use heapless::consts;
+use heapless::pool::singleton::Box;
+use heapless::pool::singleton::Pool;
 use heapless::BinaryHeap;
+use heapless::Vec;
 
 use core::cmp::Ordering;
 use core::convert::Into;
@@ -60,6 +64,12 @@ const SYS_CLOCK_HZ: u32 = SYS_CLOCK_MHZ * 1_000_000;
 const CAN_CONFIG: u32 = 0x001e0001;
 const CAN_TIMEOUT: u32 = SYS_CLOCK_MHZ * 2;
 
+use stm32f1xx_hal;
+use stm32f1xx_hal::{adc, dma, gpio};
+
+type DmaPayload = adc::AdcPayload<gpio::gpioa::PA3<gpio::Analog>, adc::Continuous>;
+type AdcDma = stm32f1xx_hal::dma::RxDma<DmaPayload, dma::dma1::C1>;
+
 #[defmt::timestamp]
 fn timestamp() -> u64 {
     DWT::get_cycle_count() as u64
@@ -73,7 +83,6 @@ heapless::pool! {
 fn allocate_tx_frame(
     frame: Frame,
 ) -> heapless::pool::singleton::Box<CanFramePool, heapless::pool::Init> {
-    use heapless::pool::singleton::Pool;
     let b = CanFramePool::alloc().unwrap();
     b.init(PriorityFrame(frame))
 }
@@ -81,27 +90,27 @@ fn allocate_tx_frame(
 #[app(device=stm32f1::stm32f103, peripherals = true, monotonic=rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
+        /// all the CAN bus resources
         #[init(None)]
         last_can_rx: Option<Instant>,
         can_id: bxcan::StandardId,
         can_tx: Tx<can::Can<pac::CAN1>>,
         can_rx: Rx<can::Can<pac::CAN1>>,
-
         can_tx_queue: heapless::BinaryHeap<
-            heapless::pool::singleton::Box<CanFramePool, heapless::pool::Init>,
-            heapless::consts::U16,
+            Box<CanFramePool, heapless::pool::Init>,
+            consts::U16,
             heapless::binary_heap::Max,
         >,
+
+        /// adc values from current sense
+        adc_buf: dma::CircBuffer<u16, AdcDma>,
     }
 
     #[init(schedule=[])]
     fn init(cx: init::Context) -> init::LateResources {
-        static mut CAN_TX_MEM: [u8; 1024] = [0; 1024];
-
         let can_tx_queue = BinaryHeap::new();
 
-        use heapless::pool::singleton::Pool;
-        CanFramePool::grow(CAN_TX_MEM);
+        CanFramePool::grow(cortex_m::singleton!(: [u8; 1024] = [0; 1024]).unwrap());
 
         let mut peripherals = cx.core;
         let device: stm32f1xx_hal::stm32::Peripherals = cx.device;
@@ -109,6 +118,7 @@ const APP: () = {
         let mut flash = device.FLASH.constrain();
         let mut rcc = device.RCC.constrain();
         let mut afio = device.AFIO.constrain(&mut rcc.apb2);
+        let mut debug = device.DBGMCU;
 
         let clocks = rcc
             .cfgr
@@ -126,18 +136,18 @@ const APP: () = {
         let can_id = {
             let mut id = 0_u16;
             let mut pins =
-                heapless::Vec::<gpio::Pxx<gpio::Input<gpio::PullDown>>, heapless::consts::U8>::new(
-                );
-            // put all can_id pins in a vec
-            pins.push(gpiob.pb14.into_pull_down_input(&mut gpiob.crh).downgrade());
-            pins.push(gpiob.pb13.into_pull_down_input(&mut gpiob.crh).downgrade());
-            pins.push(gpiob.pb12.into_pull_down_input(&mut gpiob.crh).downgrade());
-            pins.push(gpiob.pb2.into_pull_down_input(&mut gpiob.crl).downgrade());
-            pins.push(gpiob.pb1.into_pull_down_input(&mut gpiob.crl).downgrade());
-            pins.push(gpiob.pb0.into_pull_down_input(&mut gpiob.crl).downgrade());
-            pins.push(gpioa.pa4.into_pull_down_input(&mut gpioa.crl).downgrade());
-            pins.push(gpioa.pa3.into_pull_down_input(&mut gpioa.crl).downgrade());
+                heapless::Vec::<gpio::Pxx<gpio::Input<gpio::PullDown>>, consts::U8>::new();
 
+            // disable jtag
+            let (_, pb3, pb4) = afio.mapr.disable_jtag(gpioa.pa15, gpiob.pb3, gpiob.pb4);
+
+            // put all can_id pins in a vec
+            pins.push(gpiob.pb0.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(pb3.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(pb4.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(gpiob.pb5.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(gpiob.pb6.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(gpiob.pb7.into_pull_down_input(&mut gpiob.crl).downgrade());
             // interate over the pins and shift values as we go
             for (shift, pin) in pins.iter().enumerate() {
                 id |= (pin.is_high().unwrap() as u16) << (shift as u16);
@@ -172,6 +182,41 @@ const APP: () = {
         can_filters.enable_bank(0, Mask32::frames_with_std_id(can_id, can_id_mask));
         drop(can_filters);
 
+        let (_, mut c2, mut c3, mut c4) = {
+            let tim_pins = (
+                gpioa.pa8.into_alternate_push_pull(&mut gpioa.crh),
+                gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh),
+                gpioa.pa10.into_alternate_push_pull(&mut gpioa.crh),
+                gpioa.pa11.into_alternate_push_pull(&mut gpioa.crh),
+            );
+
+            let mut tim = stm32f1xx_hal::timer::Timer::tim1(device.TIM1, &clocks, &mut rcc.apb2);
+
+            // make sure the pwm timers still run during debug, or else the motors will stop
+            tim.stop_in_debug(&mut debug, false);
+
+            tim.pwm::<stm32f1xx_hal::timer::Tim1NoRemap, _, _, _>(tim_pins, &mut afio.mapr, 1.khz())
+                .split()
+        };
+
+        c2.enable();
+        c3.enable();
+        c4.enable();
+
+        let adc_buf = {
+            let dma_ch = device.DMA1.split(&mut rcc.ahb).1;
+            let ch0 = gpioa.pa3.into_analog(&mut gpioa.crl);
+
+            // setup adc for fast, continous operation.
+            let mut adc = stm32f1xx_hal::adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
+            adc.set_continuous_mode(true);
+            adc.set_sample_time(stm32f1xx_hal::adc::SampleTime::T_13);
+
+            // get singleton buffer and start dma
+            let buf = cortex_m::singleton!(: [u16; 2] = [0; 2]).unwrap();
+            adc.with_dma(ch0, dma_ch).circ_read(buf)
+        };
+
         nb::block!(can.enable()).unwrap();
 
         let (can_tx, can_rx) = can.split();
@@ -187,6 +232,7 @@ const APP: () = {
             can_tx_queue,
             can_tx,
             can_rx,
+            adc_buf,
         }
     }
 

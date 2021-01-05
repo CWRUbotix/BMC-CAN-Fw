@@ -1,13 +1,13 @@
-#[allow(non_snake_case)] fn
-init(init :: Locals { CAN_TX_MEM, .. } : init :: Locals, cx : init :: Context)
--> init :: LateResources
+#[allow(non_snake_case)] fn init(cx : init :: Context) -> init ::
+LateResources
 {
-    let can_tx_queue = BinaryHeap :: new() ; use heapless :: pool :: singleton
-    :: Pool ; CanFramePool :: grow(CAN_TX_MEM) ; let mut peripherals = cx .
-    core ; let device : stm32f1xx_hal :: stm32 :: Peripherals = cx . device ;
-    let mut flash = device . FLASH . constrain() ; let mut rcc = device . RCC
-    . constrain() ; let mut afio = device . AFIO . constrain(& mut rcc . apb2)
-    ; let clocks = rcc . cfgr . use_hse(HSE_CLOCK_MHZ . mhz()) .
+    let can_tx_queue = BinaryHeap :: new() ; CanFramePool ::
+    grow(cortex_m :: singleton ! (: [u8 ; 1024] = [0 ; 1024]) . unwrap()) ;
+    let mut peripherals = cx . core ; let device : stm32f1xx_hal :: stm32 ::
+    Peripherals = cx . device ; let mut flash = device . FLASH . constrain() ;
+    let mut rcc = device . RCC . constrain() ; let mut afio = device . AFIO .
+    constrain(& mut rcc . apb2) ; let mut debug = device . DBGMCU ; let clocks
+    = rcc . cfgr . use_hse(HSE_CLOCK_MHZ . mhz()) .
     sysclk(SYS_CLOCK_MHZ . mhz()) . hclk(SYS_CLOCK_MHZ . mhz()) .
     pclk1((SYS_CLOCK_MHZ / 2) . mhz()) . pclk2(SYS_CLOCK_MHZ . mhz()) .
     freeze(& mut flash . acr) ; let mut gpioa = device . GPIOA .
@@ -15,23 +15,20 @@ init(init :: Locals { CAN_TX_MEM, .. } : init :: Locals, cx : init :: Context)
     split(& mut rcc . apb2) ; #[allow(unused_must_use)] let can_id =
     {
         let mut id = 0_u16 ; let mut pins = heapless :: Vec :: < gpio :: Pxx <
-        gpio :: Input < gpio :: PullDown > >, heapless :: consts :: U8 > ::
-        new() ; pins .
-        push(gpiob . pb14 . into_pull_down_input(& mut gpiob . crh) .
-             downgrade()) ; pins .
-        push(gpiob . pb13 . into_pull_down_input(& mut gpiob . crh) .
-             downgrade()) ; pins .
-        push(gpiob . pb12 . into_pull_down_input(& mut gpiob . crh) .
-             downgrade()) ; pins .
-        push(gpiob . pb2 . into_pull_down_input(& mut gpiob . crl) .
-             downgrade()) ; pins .
-        push(gpiob . pb1 . into_pull_down_input(& mut gpiob . crl) .
-             downgrade()) ; pins .
+        gpio :: Input < gpio :: PullDown > >, consts :: U8 > :: new() ;
+        let(_, pb3, pb4) = afio . mapr .
+        disable_jtag(gpioa . pa15, gpiob . pb3, gpiob . pb4) ; pins .
         push(gpiob . pb0 . into_pull_down_input(& mut gpiob . crl) .
              downgrade()) ; pins .
-        push(gpioa . pa4 . into_pull_down_input(& mut gpioa . crl) .
+        push(pb3 . into_pull_down_input(& mut gpiob . crl) . downgrade()) ;
+        pins .
+        push(pb4 . into_pull_down_input(& mut gpiob . crl) . downgrade()) ;
+        pins .
+        push(gpiob . pb5 . into_pull_down_input(& mut gpiob . crl) .
              downgrade()) ; pins .
-        push(gpioa . pa3 . into_pull_down_input(& mut gpioa . crl) .
+        push(gpiob . pb6 . into_pull_down_input(& mut gpiob . crl) .
+             downgrade()) ; pins .
+        push(gpiob . pb7 . into_pull_down_input(& mut gpiob . crl) .
              downgrade()) ; for(shift, pin) in pins . iter() . enumerate()
         {
             id |= (pin . is_high() . unwrap() as u16) << (shift as u16) ;
@@ -51,10 +48,32 @@ init(init :: Locals { CAN_TX_MEM, .. } : init :: Locals, cx : init :: Context)
               }) ; let can_id_mask = StandardId :: new(0xFF) . unwrap() ; let
     mut can_filters = can . modify_filters() ; can_filters .
     enable_bank(0, Mask32 :: frames_with_std_id(can_id, can_id_mask)) ;
-    drop(can_filters) ; nb :: block ! (can . enable()) . unwrap() ;
-    let(can_tx, can_rx) = can . split() ; peripherals . DCB . enable_trace() ;
-    DWT :: unlock() ; peripherals . DWT . enable_cycle_counter() ; init ::
-    LateResources { can_id, can_tx_queue, can_tx, can_rx, }
+    drop(can_filters) ; let(_, mut c2, mut c3, mut c4) =
+    {
+        let tim_pins =
+        (gpioa . pa8 . into_alternate_push_pull(& mut gpioa . crh), gpioa .
+         pa9 . into_alternate_push_pull(& mut gpioa . crh), gpioa . pa10 .
+         into_alternate_push_pull(& mut gpioa . crh), gpioa . pa11 .
+         into_alternate_push_pull(& mut gpioa . crh),) ; let mut tim =
+        stm32f1xx_hal :: timer :: Timer ::
+        tim1(device . TIM1, & clocks, & mut rcc . apb2) ; tim .
+        stop_in_debug(& mut debug, false) ; tim . pwm :: < stm32f1xx_hal ::
+        timer :: Tim1NoRemap, _, _, _ >
+        (tim_pins, & mut afio . mapr, 1 . khz()) . split()
+    } ; c2 . enable() ; c3 . enable() ; c4 . enable() ; let adc_buf =
+    {
+        let dma_ch = device . DMA1 . split(& mut rcc . ahb) . 1 ; let ch0 =
+        gpioa . pa3 . into_analog(& mut gpioa . crl) ; let mut adc =
+        stm32f1xx_hal :: adc :: Adc ::
+        adc1(device . ADC1, & mut rcc . apb2, clocks) ; adc .
+        set_continuous_mode(true) ; adc .
+        set_sample_time(stm32f1xx_hal :: adc :: SampleTime :: T_13) ; let buf
+        = cortex_m :: singleton ! (: [u16 ; 2] = [0 ; 2]) . unwrap() ; adc .
+        with_dma(ch0, dma_ch) . circ_read(buf)
+    } ; nb :: block ! (can . enable()) . unwrap() ; let(can_tx, can_rx) = can
+    . split() ; peripherals . DCB . enable_trace() ; DWT :: unlock() ;
+    peripherals . DWT . enable_cycle_counter() ; init :: LateResources
+    { can_id, can_tx_queue, can_tx, can_rx, adc_buf, }
 } #[allow(non_snake_case)] fn idle(_cx : idle :: Context) -> !
 {
     use rtic :: Mutex as _ ; loop
@@ -125,23 +144,14 @@ handle_rx_frame(cx : handle_rx_frame :: Context, frame : Frame)
 } #[doc = r" Resources initialized at runtime"] #[allow(non_snake_case)] pub
 struct initLateResources
 {
-    pub can_id : bxcan :: StandardId, pub can_rx : Rx < can :: Can < pac ::
-    CAN1 > >, pub can_tx : Tx < can :: Can < pac :: CAN1 > >, pub can_tx_queue
-    : heapless :: BinaryHeap < heapless :: pool :: singleton :: Box <
-    CanFramePool, heapless :: pool :: Init >, heapless :: consts :: U16,
-    heapless :: binary_heap :: Max, >
-} #[allow(non_snake_case)] #[doc(hidden)] pub struct initLocals < >
-{ CAN_TX_MEM : & 'static mut [u8 ; 1024] } impl < > initLocals < >
-{
-    #[inline(always)] unsafe fn new() -> Self
-    {
-        static mut CAN_TX_MEM : [u8 ; 1024] = [0 ; 1024] ; initLocals
-        { CAN_TX_MEM : & mut CAN_TX_MEM }
-    }
+    pub adc_buf : dma :: CircBuffer < u16, AdcDma >, pub can_id : bxcan ::
+    StandardId, pub can_rx : Rx < can :: Can < pac :: CAN1 > >, pub can_tx :
+    Tx < can :: Can < pac :: CAN1 > >, pub can_tx_queue : heapless ::
+    BinaryHeap < Box < CanFramePool, heapless :: pool :: Init >, consts ::
+    U16, heapless :: binary_heap :: Max, >
 } #[allow(non_snake_case)] #[doc = "Initialization function"] pub mod init
 {
-    #[doc(inline)] pub use super :: initLocals as Locals ; #[doc(inline)] pub
-    use super :: initLateResources as LateResources ;
+    #[doc(inline)] pub use super :: initLateResources as LateResources ;
     #[doc = r" Execution context"] pub struct Context < >
     {
         #[doc = r" Core (Cortex-M) peripherals"] pub core : rtic :: export ::
@@ -222,10 +232,9 @@ struct can_rx0Resources < 'a >
 struct can_txResources < 'a >
 {
     pub can_tx : & 'a mut Tx < can :: Can < pac :: CAN1 > >, pub can_tx_queue
-    : & 'a mut heapless :: BinaryHeap < heapless :: pool :: singleton :: Box <
-    CanFramePool, heapless :: pool :: Init >, heapless :: consts :: U16,
-    heapless :: binary_heap :: Max, >, pub last_can_rx : & 'a mut Option <
-    Instant >,
+    : & 'a mut heapless :: BinaryHeap < Box < CanFramePool, heapless :: pool
+    :: Init >, consts :: U16, heapless :: binary_heap :: Max, >, pub
+    last_can_rx : & 'a mut Option < Instant >,
 } #[allow(non_snake_case)] #[doc = "Hardware task"] pub mod can_tx
 {
     #[doc(inline)] pub use super :: can_txResources as Resources ;
@@ -272,18 +281,17 @@ handle_rx_frameResources < 'a >
     > > = core :: mem :: MaybeUninit :: uninit() ;
     #[allow(non_upper_case_globals)] #[link_section = ".uninit.rtic2"] static
     mut can_tx_queue : core :: mem :: MaybeUninit < heapless :: BinaryHeap <
-    heapless :: pool :: singleton :: Box < CanFramePool, heapless :: pool ::
-    Init >, heapless :: consts :: U16, heapless :: binary_heap :: Max, > > =
-    core :: mem :: MaybeUninit :: uninit() ; impl < 'a > rtic :: Mutex for
-    resources :: can_tx_queue < 'a >
+    Box < CanFramePool, heapless :: pool :: Init >, consts :: U16, heapless ::
+    binary_heap :: Max, > > = core :: mem :: MaybeUninit :: uninit() ; impl <
+    'a > rtic :: Mutex for resources :: can_tx_queue < 'a >
     {
-        type T = heapless :: BinaryHeap < heapless :: pool :: singleton :: Box
-        < CanFramePool, heapless :: pool :: Init >, heapless :: consts :: U16,
-        heapless :: binary_heap :: Max, > ; #[inline(always)] fn lock < R >
+        type T = heapless :: BinaryHeap < Box < CanFramePool, heapless :: pool
+        :: Init >, consts :: U16, heapless :: binary_heap :: Max, > ;
+        #[inline(always)] fn lock < R >
         (& mut self, f : impl
-         FnOnce(& mut heapless :: BinaryHeap < heapless :: pool :: singleton
-                :: Box < CanFramePool, heapless :: pool :: Init >, heapless ::
-                consts :: U16, heapless :: binary_heap :: Max, >) -> R) -> R
+         FnOnce(& mut heapless :: BinaryHeap < Box < CanFramePool, heapless ::
+                pool :: Init >, consts :: U16, heapless :: binary_heap :: Max,
+                >) -> R) -> R
         {
             #[doc = r" Priority ceiling"] const CEILING : u8 = 2u8 ; unsafe
             {
@@ -292,9 +300,9 @@ handle_rx_frameResources < 'a >
                      stm32f1 :: stm32f103 :: NVIC_PRIO_BITS, f,)
             }
         }
-    } #[allow(non_upper_case_globals)] static mut last_can_rx : Option <
-    Instant > = None ; impl < 'a > rtic :: Mutex for resources :: last_can_rx
-    < 'a >
+    } #[allow(non_upper_case_globals)] #[doc = " all the CAN bus resources"]
+    static mut last_can_rx : Option < Instant > = None ; impl < 'a > rtic ::
+    Mutex for resources :: last_can_rx < 'a >
     {
         type T = Option < Instant > ; #[inline(always)] fn lock < R >
         (& mut self, f : impl FnOnce(& mut Option < Instant >) -> R) -> R
@@ -485,11 +493,10 @@ handle_rx_frameResources < 'a >
         StandardId > () ; rtic :: export :: assert_send :: < Tx < can :: Can <
         pac :: CAN1 > > > () ; rtic :: export :: assert_send :: < Rx < can ::
         Can < pac :: CAN1 > > > () ; rtic :: export :: assert_send :: <
-        heapless :: BinaryHeap < heapless :: pool :: singleton :: Box <
-        CanFramePool, heapless :: pool :: Init >, heapless :: consts :: U16,
-        heapless :: binary_heap :: Max, > > () ; rtic :: export :: assert_send
-        :: < Frame > () ; rtic :: export :: interrupt :: disable() ;
-        (0 .. 16u8) .
+        heapless :: BinaryHeap < Box < CanFramePool, heapless :: pool :: Init
+        >, consts :: U16, heapless :: binary_heap :: Max, > > () ; rtic ::
+        export :: assert_send :: < Frame > () ; rtic :: export :: interrupt ::
+        disable() ; (0 .. 16u8) .
         for_each(| i | handle_rx_frame_S0_FQ . enqueue_unchecked(i)) ; let mut
         core : rtic :: export :: Peripherals = rtic :: export :: Peripherals
         :: steal() . into() ; let _ =
@@ -521,9 +528,8 @@ handle_rx_frameResources < 'a >
                      logical2hw(2u8, stm32f1 :: stm32f103 :: NVIC_PRIO_BITS),)
         ; rtic :: export :: NVIC ::
         unmask(stm32f1 :: stm32f103 :: Interrupt :: USB_HP_CAN_TX) ; let late
-        = crate ::
-        init(init :: Locals :: new(), init :: Context :: new(core . into())) ;
-        can_id . as_mut_ptr() . write(late . can_id) ; can_rx . as_mut_ptr() .
+        = crate :: init(init :: Context :: new(core . into())) ; can_id .
+        as_mut_ptr() . write(late . can_id) ; can_rx . as_mut_ptr() .
         write(late . can_rx) ; can_tx . as_mut_ptr() . write(late . can_tx) ;
         can_tx_queue . as_mut_ptr() . write(late . can_tx_queue) ; rtic ::
         export :: interrupt :: enable() ; crate ::
