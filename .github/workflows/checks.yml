@@ -1,0 +1,28 @@
+on: [push, pull_request]
+
+name: CI
+
+jobs:
+  build:
+    name: Build firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+          target: thumbv7m-none-eabi
+      - name: Build
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+          target: thumbv7m-none-eabi
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+

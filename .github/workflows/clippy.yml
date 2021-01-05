@@ -1,0 +1,22 @@
+on: [push, pull_request]
+
+name: Clippy check
+jobs:
+  clippy_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          target: thumbv7m-none-eabi
+          override: true
+          components: clippy
+      - name: Run clippy
+        uses: actions-rs/clippy-check@v1
+        with:
+{% raw %}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --target thumbv7m-none-eabi
+{% endraw %}
