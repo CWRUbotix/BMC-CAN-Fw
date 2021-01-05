@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["EVCR",""],["EXTICR1",""],["EXTICR2",""],["EXTICR3",""],["EXTICR4",""],["MAPR","AF remap and debug I/O configuration register (MAPR)"],["MAPR2",""],["Parts","HAL wrapper around the AFIO registers"]],"trait":[["AfioExt",""]]});

@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["Peripheral",""],["UsbBus","USB peripheral driver for STM32 microcontrollers."]],"type":[["UsbBusType",""]]});

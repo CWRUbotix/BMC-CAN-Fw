@@ -1,3 +1,0 @@
-(function() {var implementors = {};
-implementors["stm32f1xx_hal"] = [{"text":"impl&lt;WORD, PIN&gt; OneShot&lt;ADC1, WORD, PIN&gt; for Adc&lt;ADC1&gt; <span class=\"where fmt-newline\">where<br>&nbsp;&nbsp;&nbsp;&nbsp;WORD: From&lt;u16&gt;,<br>&nbsp;&nbsp;&nbsp;&nbsp;PIN: Channel&lt;ADC1, ID = u8&gt;,&nbsp;</span>","synthetic":false,"types":[]},{"text":"impl&lt;WORD, PIN&gt; OneShot&lt;ADC2, WORD, PIN&gt; for Adc&lt;ADC2&gt; <span class=\"where fmt-newline\">where<br>&nbsp;&nbsp;&nbsp;&nbsp;WORD: From&lt;u16&gt;,<br>&nbsp;&nbsp;&nbsp;&nbsp;PIN: Channel&lt;ADC2, ID = u8&gt;,&nbsp;</span>","synthetic":false,"types":[]}];
-if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

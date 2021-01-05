@@ -1,1 +1,0 @@
-{"rustc":10050954291966789357,"features":"[]","target":5109820996867072352,"profile":5434104829867590718,"path":12556506090039153102,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"thumbv7m-none-eabi/debug/.fingerprint/usb-device-a704db3c07bc0eba/dep-lib-usb-device"}}],"rustflags":["-C","link-arg=-Tlink.x","-C","link-arg=-Tdefmt.x"],"metadata":12546450760270422694,"config":0}

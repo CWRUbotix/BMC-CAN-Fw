@@ -1,1 +1,0 @@
-initSidebarItems({"type":[["MFA_R","Reader of field `MFA`"],["MFC_R","Reader of field `MFC`"],["OFOC_R","Reader of field `OFOC`"],["OMFC_R","Reader of field `OMFC`"],["R","Reader of register DMAMFBOCR"]]});

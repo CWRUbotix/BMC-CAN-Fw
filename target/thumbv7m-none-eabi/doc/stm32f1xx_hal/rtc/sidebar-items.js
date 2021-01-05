@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["Rtc","Real time clock"]]});

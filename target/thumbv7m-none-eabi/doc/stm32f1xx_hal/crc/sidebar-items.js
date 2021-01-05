@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["Crc","Constrained CRC peripheral"]],"trait":[["CrcExt","Extension trait to constrain the CRC peripheral"]]});

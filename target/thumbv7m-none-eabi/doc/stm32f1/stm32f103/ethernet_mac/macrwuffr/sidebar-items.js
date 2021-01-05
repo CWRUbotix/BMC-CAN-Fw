@@ -1,1 +1,0 @@
-initSidebarItems({"type":[["R","Reader of register MACRWUFFR"],["W","Writer for register MACRWUFFR"]]});

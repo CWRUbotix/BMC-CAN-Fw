@@ -1,1 +1,0 @@
-initSidebarItems({"enum":[["SlaveMode","SMS (Slave Mode Selection) register"]],"struct":[["Qei",""],["QeiOptions","Quadrature Encoder Interface (QEI) options"]]});

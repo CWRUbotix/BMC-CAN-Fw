@@ -1,1 +1,0 @@
-initSidebarItems({"type":[["DIVL_R","Reader of field `DIVL`"],["R","Reader of register DIVL"]]});

@@ -1,1 +1,0 @@
-initSidebarItems({"type":[["DATA0_R","Reader of field `Data0`"],["DATA1_R","Reader of field `Data1`"],["NRST_STDBY_R","Reader of field `nRST_STDBY`"],["NRST_STOP_R","Reader of field `nRST_STOP`"],["OPTERR_R","Reader of field `OPTERR`"],["R","Reader of register OBR"],["RDPRT_R","Reader of field `RDPRT`"],["WDG_SW_R","Reader of field `WDG_SW`"]]});

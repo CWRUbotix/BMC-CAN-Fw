@@ -1,1 +1,0 @@
-{"rustc":10050954291966789357,"features":"[]","target":6038836582402331615,"profile":2878287927386231696,"path":727797270183493607,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"thumbv7m-none-eabi/debug/.fingerprint/vcell-a8a5a7341be76d1c/dep-lib-vcell"}}],"rustflags":["-C","link-arg=-Tlink.x","-C","link-arg=-Tdefmt.x"],"metadata":13577594567583942782,"config":0}

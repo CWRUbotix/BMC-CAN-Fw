@@ -1,1 +1,0 @@
-initSidebarItems({"enum":[["Error",""],["Event","Interrupt events"]],"struct":[["CountDownTimer",""],["Tim1FullRemap",""],["Tim1NoRemap",""],["Tim2FullRemap",""],["Tim2NoRemap",""],["Tim2PartialRemap1",""],["Tim2PartialRemap2",""],["Tim3FullRemap",""],["Tim3NoRemap",""],["Tim3PartialRemap",""],["Timer",""]]});

@@ -1,4 +1,0 @@
-cargo:rustc-link-lib=static=cortex-m
-cargo:rustc-link-search=/home/bscholar/dev/cwrubotix/bmc-can-rs/target/thumbv7m-none-eabi/debug/build/cortex-m-03af773a0f2aa1aa/out
-cargo:rustc-cfg=cortex_m
-cargo:rustc-cfg=armv7m

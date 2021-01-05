@@ -1,1 +1,0 @@
-{"rustc":10050954291966789357,"features":"[]","target":16754628301399686335,"profile":2878287927386231696,"path":4225450676057905523,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"thumbv7m-none-eabi/debug/.fingerprint/volatile-8ca73710b90dbdee/dep-lib-volatile"}}],"rustflags":["-C","link-arg=-Tlink.x","-C","link-arg=-Tdefmt.x"],"metadata":7179546619508517661,"config":0}

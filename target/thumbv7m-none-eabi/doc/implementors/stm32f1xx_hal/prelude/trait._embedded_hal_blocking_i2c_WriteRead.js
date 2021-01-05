@@ -1,3 +1,0 @@
-(function() {var implementors = {};
-implementors["stm32f1xx_hal"] = [{"text":"impl&lt;I2C, PINS&gt; WriteRead for BlockingI2c&lt;I2C, PINS&gt; <span class=\"where fmt-newline\">where<br>&nbsp;&nbsp;&nbsp;&nbsp;I2C: Deref&lt;Target = I2cRegisterBlock&gt;,&nbsp;</span>","synthetic":false,"types":[]}];
-if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

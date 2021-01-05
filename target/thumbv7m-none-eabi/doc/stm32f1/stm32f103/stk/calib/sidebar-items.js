@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["TENMS_W","Write proxy for field `TENMS`"]],"type":[["R","Reader of register CALIB"],["TENMS_R","Reader of field `TENMS`"],["W","Writer for register CALIB"]]});
