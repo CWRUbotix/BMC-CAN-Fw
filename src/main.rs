@@ -14,8 +14,11 @@ use cortex_m::peripheral::DWT;
 use rtic::app;
 use rtic::cyccnt::{Instant, U32Ext as _};
 
+use stm32f1xx_hal;
+use stm32f1xx_hal::gpio::ExtiPin;
+use stm32f1xx_hal::pac;
 use stm32f1xx_hal::pac::{Interrupt, CAN1};
-use stm32f1xx_hal::{can, pac};
+use stm32f1xx_hal::{adc, dma, gpio, pwm};
 
 use bxcan::{filter::Mask32, Can, Frame, Id, Rx, StandardId, Tx};
 
@@ -34,26 +37,10 @@ use defmt;
 /// this makes sure that the rtt logger is linked into the binary
 use defmt_rtt as _;
 
-pub struct PriorityFrame(Frame);
+mod can;
+mod status;
 
-impl Ord for PriorityFrame {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.priority().cmp(&other.0.priority())
-    }
-}
-
-impl PartialOrd for PriorityFrame {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for PriorityFrame {}
-impl PartialEq for PriorityFrame {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
+use can::PriorityFrame;
 
 const HSE_CLOCK_MHZ: u32 = 8;
 const SYS_CLOCK_MHZ: u32 = 72;
@@ -64,25 +51,42 @@ const SYS_CLOCK_HZ: u32 = SYS_CLOCK_MHZ * 1_000_000;
 const CAN_CONFIG: u32 = 0x001e0001;
 const CAN_TIMEOUT: u32 = SYS_CLOCK_MHZ * 2;
 
-use stm32f1xx_hal;
-use stm32f1xx_hal::{adc, dma, gpio};
-
+// hardware type defs
 type DmaPayload = adc::AdcPayload<gpio::gpioa::PA3<gpio::Analog>, adc::Continuous>;
 type AdcDma = stm32f1xx_hal::dma::RxDma<DmaPayload, dma::dma1::C1>;
+
+type PwmChannel<C> = pwm::PwmChannel<pac::TIM1, C>;
+type MotorHighChannel = PwmChannel<pwm::C2>;
+type MotorLowChannel = PwmChannel<pwm::C3>;
+type CurrentLimitChannel = PwmChannel<pwm::C4>;
+
+type FaultPin = gpio::gpioa::PA4<gpio::Input<gpio::Floating>>;
+type OverCurrentPin = gpio::gpioa::PA5<gpio::Input<gpio::Floating>>;
+type SleepPin = gpio::gpioa::PA6<gpio::Output<gpio::PushPull>>;
+
+type Status1 = status::StatusLed<gpio::gpiob::PB10<gpio::Output<gpio::PushPull>>>;
+type Status2 = status::StatusLed<gpio::gpiob::PB11<gpio::Output<gpio::PushPull>>>;
+
+// timings
+const fn times_per_second(times: u32) -> u32 {
+    SYS_CLOCK_HZ / times
+}
+
+const LED_UPDATE_PD: u32 = times_per_second(8);
 
 #[defmt::timestamp]
 fn timestamp() -> u64 {
     DWT::get_cycle_count() as u64
 }
 
+// can frame pool definition
 heapless::pool! {
     #[allow(non_upper_case_globals)]
     CanFramePool: PriorityFrame
 }
 
-fn allocate_tx_frame(
-    frame: Frame,
-) -> heapless::pool::singleton::Box<CanFramePool, heapless::pool::Init> {
+// can frame pool helper method
+fn allocate_tx_frame(frame: Frame) -> Box<CanFramePool, heapless::pool::Init> {
     let b = CanFramePool::alloc().unwrap();
     b.init(PriorityFrame(frame))
 }
@@ -94,8 +98,8 @@ const APP: () = {
         #[init(None)]
         last_can_rx: Option<Instant>,
         can_id: bxcan::StandardId,
-        can_tx: Tx<can::Can<pac::CAN1>>,
-        can_rx: Rx<can::Can<pac::CAN1>>,
+        can_tx: Tx<stm32f1xx_hal::can::Can<pac::CAN1>>,
+        can_rx: Rx<stm32f1xx_hal::can::Can<pac::CAN1>>,
         can_tx_queue: heapless::BinaryHeap<
             Box<CanFramePool, heapless::pool::Init>,
             consts::U16,
@@ -104,9 +108,24 @@ const APP: () = {
 
         /// adc values from current sense
         adc_buf: dma::CircBuffer<u16, AdcDma>,
+
+        // pwm channels
+        motor_high: MotorHighChannel,
+        motor_low: MotorLowChannel,
+        motor_current_limit: CurrentLimitChannel,
+
+        // gpio
+        fault_pin: FaultPin,
+        sleep_pin: SleepPin,
+        over_current_pin: OverCurrentPin,
+
+        // status
+        status1: Status1,
+        status2: Status2,
+        //software variables
     }
 
-    #[init(schedule=[])]
+    #[init(schedule=[update_leds])]
     fn init(cx: init::Context) -> init::LateResources {
         let can_tx_queue = BinaryHeap::new();
 
@@ -119,6 +138,7 @@ const APP: () = {
         let mut rcc = device.RCC.constrain();
         let mut afio = device.AFIO.constrain(&mut rcc.apb2);
         let mut debug = device.DBGMCU;
+        let mut exti = device.EXTI;
 
         let clocks = rcc
             .cfgr
@@ -143,11 +163,14 @@ const APP: () = {
 
             // put all can_id pins in a vec
             pins.push(gpiob.pb0.into_pull_down_input(&mut gpiob.crl).downgrade());
-            pins.push(pb3.into_pull_down_input(&mut gpiob.crl).downgrade());
-            pins.push(pb4.into_pull_down_input(&mut gpiob.crl).downgrade());
-            pins.push(gpiob.pb5.into_pull_down_input(&mut gpiob.crl).downgrade());
-            pins.push(gpiob.pb6.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(gpiob.pb1.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(gpiob.pb2.into_pull_down_input(&mut gpiob.crl).downgrade());
             pins.push(gpiob.pb7.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(gpiob.pb6.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(gpiob.pb5.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(pb4.into_pull_down_input(&mut gpiob.crl).downgrade());
+            pins.push(pb3.into_pull_down_input(&mut gpiob.crl).downgrade());
+
             // interate over the pins and shift values as we go
             for (shift, pin) in pins.iter().enumerate() {
                 id |= (pin.is_high().unwrap() as u16) << (shift as u16);
@@ -159,7 +182,7 @@ const APP: () = {
 
         let can_id = StandardId::new(can_id).unwrap();
 
-        let can = can::Can::new(device.CAN1, &mut rcc.apb1, device.USB);
+        let can = stm32f1xx_hal::can::Can::new(device.CAN1, &mut rcc.apb1, device.USB);
 
         {
             let tx_pin = gpiob.pb9.into_alternate_push_pull(&mut gpiob.crh);
@@ -182,7 +205,16 @@ const APP: () = {
         can_filters.enable_bank(0, Mask32::frames_with_std_id(can_id, can_id_mask));
         drop(can_filters);
 
-        let (_, mut c2, mut c3, mut c4) = {
+        use bxcan::Interrupts;
+        can.enable_interrupts(
+            Interrupts::FIFO0_MESSAGE_PENDING | Interrupts::FIFO0_MESSAGE_PENDING,
+        );
+
+        nb::block!(can.enable()).unwrap();
+
+        let (can_tx, can_rx) = can.split();
+
+        let (_, mut motor_high, mut motor_low, mut motor_current_limit) = {
             let tim_pins = (
                 gpioa.pa8.into_alternate_push_pull(&mut gpioa.crh),
                 gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh),
@@ -199,9 +231,12 @@ const APP: () = {
                 .split()
         };
 
-        c2.enable();
-        c3.enable();
-        c4.enable();
+        motor_high.enable();
+        motor_low.enable();
+        motor_current_limit.enable();
+
+        motor_high.set_duty(0);
+        motor_low.set_duty(0);
 
         let adc_buf = {
             let dma_ch = device.DMA1.split(&mut rcc.ahb).1;
@@ -210,29 +245,52 @@ const APP: () = {
             // setup adc for fast, continous operation.
             let mut adc = stm32f1xx_hal::adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
             adc.set_continuous_mode(true);
-            adc.set_sample_time(stm32f1xx_hal::adc::SampleTime::T_13);
+            adc.set_sample_time(adc::SampleTime::T_28);
+            adc.set_align(adc::Align::Right); // TODO: Check if this is right
 
             // get singleton buffer and start dma
             let buf = cortex_m::singleton!(: [u16; 2] = [0; 2]).unwrap();
             adc.with_dma(ch0, dma_ch).circ_read(buf)
         };
 
-        nb::block!(can.enable()).unwrap();
+        let mut fault_pin = gpioa.pa4.into_floating_input(&mut gpioa.crl);
+        let mut over_current_pin = gpioa.pa5.into_floating_input(&mut gpioa.crl);
+        let sleep_pin = gpioa.pa6.into_push_pull_output(&mut gpioa.crl);
 
-        let (can_tx, can_rx) = can.split();
+        over_current_pin.make_interrupt_source(&mut afio);
+        over_current_pin.trigger_on_edge(&exti, gpio::Edge::RISING); // TODO: CHECK this
+        over_current_pin.enable_interrupt(&exti);
+
+        fault_pin.make_interrupt_source(&mut afio);
+        fault_pin.trigger_on_edge(&exti, gpio::Edge::FALLING); // TODO: Check this
+        fault_pin.enable_interrupt(&exti);
+
+        let status1 = status::StatusLed::new(gpiob.pb10.into_push_pull_output(&mut gpiob.crh));
+        let status2 = status::StatusLed::new(gpiob.pb11.into_push_pull_output(&mut gpiob.crh));
 
         peripherals.DCB.enable_trace();
         DWT::unlock();
         peripherals.DWT.enable_cycle_counter();
 
-        // let now = cx.start;
-        //
+        let now = cx.start;
+        cx.schedule
+            .update_leds(now + LED_UPDATE_PD.cycles())
+            .unwrap();
+
         init::LateResources {
             can_id,
             can_tx_queue,
             can_tx,
             can_rx,
             adc_buf,
+            motor_high,
+            motor_low,
+            motor_current_limit,
+            fault_pin,
+            over_current_pin,
+            sleep_pin,
+            status1,
+            status2,
         }
     }
 
@@ -241,6 +299,34 @@ const APP: () = {
         loop {
             core::sync::atomic::spin_loop_hint();
         }
+    }
+
+    #[task(priority = 2, binds = EXTI9_5, resources = [over_current_pin])]
+    fn handle_over_current(cx: handle_over_current::Context) {
+        let pin = cx.resources.over_current_pin;
+
+        pin.clear_interrupt_pending_bit();
+
+        // TODO: Handle overcurrent
+    }
+
+    #[task(priority = 2, binds = DMA1_CHANNEL1, resources=[adc_buf])]
+    fn handle_adc(cx: handle_adc::Context) {
+        let adc_buf = cx.resources.adc_buf;
+        let mut adc_val = 0_u16;
+        adc_buf
+            .peek(|buf, _| {
+                adc_val = *buf;
+            })
+            .unwrap();
+
+        // TODO: Do something with the adc_val here
+        // do calculations
+        //
+        // we should really do something that takes the vref into account
+        // such as: let x = adc_val * 1200 / adc.read_vref();
+        // but i dont know how to get the vref value through the dma
+        // for now we will just do it the dumb way
     }
 
     #[task(capacity = 16, resources=[can_id, can_tx_queue, last_can_rx] )]
@@ -326,6 +412,19 @@ const APP: () = {
                 Err(_) => unreachable!(),
             }
         }
+    }
+
+    #[task(priority = 5, resources = [status1, status2], schedule=[update_leds])]
+    fn update_leds(cx: update_leds::Context) {
+        let status1 = cx.resources.status1;
+        let status2 = cx.resources.status2;
+
+        status1.update();
+        status2.update();
+
+        cx.schedule
+            .update_leds(Instant::now() + LED_UPDATE_PD.cycles())
+            .unwrap();
     }
 
     #[allow(non_snake_case)]
