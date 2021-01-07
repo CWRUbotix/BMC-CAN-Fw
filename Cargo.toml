@@ -21,6 +21,14 @@ defmt-rtt = "0.1"
 bitfield = "0.13.2"
 # asm-delay = "0.9"
 
+[features]
+heartbeat = []
+defmt-debug = []
+
+default = [
+    "defmt-debug", "heartbeat"
+]
+
 [dependencies.stm32f1xx-hal]
 version = ""
 features = ["stm32f103", "rt", "stm32-usbd"]
