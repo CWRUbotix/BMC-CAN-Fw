@@ -49,6 +49,7 @@ pub enum IncomingFrame {
     Setpoint(i16),
     SetCurrentLimit(u8),
     Invert(bool),
+    SetIdleMode(crate::IdleMode),
     HeartBeat,
     Stop,
 }
@@ -105,6 +106,14 @@ impl TryFrom<Frame> for IncomingFrame {
                 0x4 => {
                     check_frame_size!(1, dlc);
                     Ok(IncomingFrame::SetCurrentLimit(data[0]))
+                }
+                0x5 => {
+                    check_frame_size!(1, dlc);
+                    Ok(IncomingFrame::SetIdleMode(if data[0] == 0 {
+                        crate::IdleMode::Coast
+                    } else {
+                        crate::IdleMode::Brake
+                    }))
                 }
                 _ => Err(FrameConversionError::InvalidCommand { cmd }),
             }

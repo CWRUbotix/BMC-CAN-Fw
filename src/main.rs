@@ -44,7 +44,7 @@ use error_codes::ErrorCode;
 
 use can_types::PriorityFrame;
 
-#[derive(Eq, PartialEq, Copy, Clone)]
+#[derive(Eq, PartialEq, Copy, Clone, defmt::Format)]
 pub enum IdleMode {
     Brake,
     Coast,
@@ -537,7 +537,7 @@ const APP: () = {
         // for now we will just do it the dumb way
     }
 
-    #[task(priority = 5, capacity = 16, resources=[can_tx_queue, last_can_rx, inverted, current_limit, setpoint, last_heartbeat] )]
+    #[task(priority = 5, capacity = 16, resources=[can_tx_queue, last_can_rx, inverted, current_limit, setpoint, last_heartbeat, idle_mode] )]
     fn handle_rx_frame(mut cx: handle_rx_frame::Context, frame: Frame) {
         use can_types::IncomingFrame;
         use can_types::IncomingFrame::*;
@@ -570,6 +570,10 @@ const APP: () = {
             Ok(Stop) => {
                 defmt::info!("Stopping motor (setpoint = 0)");
                 cx.resources.setpoint.lock(|s| *s = 0);
+            }
+            Ok(SetIdleMode(mode)) => {
+                defmt::info!("Setting idle mode to {:?}", mode);
+                cx.resources.idle_mode.lock(|im| *im = mode);
             }
             Err(e) => defmt::panic!("{:?}", e),
         };
