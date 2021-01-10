@@ -7,9 +7,8 @@
 )]
 #![no_std]
 #![no_main]
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
-use core::prelude::*;
 use embedded_hal::prelude::*;
 use stm32f1xx_hal::prelude::*;
 
@@ -20,25 +19,19 @@ use cortex_m::peripheral::DWT;
 use rtic::app;
 use rtic::cyccnt::{Instant, U32Ext as _};
 
-use stm32f1xx_hal;
 use stm32f1xx_hal::gpio::ExtiPin;
 use stm32f1xx_hal::pac;
-use stm32f1xx_hal::pac::{Interrupt, CAN1};
+use stm32f1xx_hal::pac::Interrupt;
 use stm32f1xx_hal::{adc, can, dma, gpio, pwm, timer};
 
-use bxcan::{filter::Mask32, Can, Frame, Id, Rx, StandardId, Tx};
+use bxcan::{filter::Mask32, Frame, Rx, StandardId, Tx};
 
-use heapless;
 use heapless::consts;
 use heapless::pool::singleton::Box;
 use heapless::pool::singleton::Pool;
 use heapless::BinaryHeap;
-use heapless::Vec;
 
-use core::cmp::Ordering;
 use core::convert::Into;
-
-use defmt;
 
 /// this makes sure that the rtt logger is linked into the binary
 use defmt_rtt as _;
@@ -256,7 +249,7 @@ const APP: () = {
 
         use bxcan::Interrupts;
         can.enable_interrupts(
-            Interrupts::FIFO0_MESSAGE_PENDING | Interrupts::FIFO0_MESSAGE_PENDING,
+            Interrupts::FIFO0_MESSAGE_PENDING | Interrupts::FIFO1_MESSAGE_PENDING,
         );
 
         nb::block!(can.enable()).unwrap();
@@ -378,7 +371,7 @@ const APP: () = {
 
             can_tx_queue.lock(|q| {
                 q.push(allocate_tx_frame(
-                    OutgoingFrame::Overcurrent.into_with_id(can_id.clone()),
+                    OutgoingFrame::Overcurrent.into_with_id(*can_id),
                 ))
                 .unwrap();
             });
@@ -390,8 +383,7 @@ const APP: () = {
 
             can_tx_queue.lock(|q| {
                 q.push(allocate_tx_frame(
-                    OutgoingFrame::Error(ErrorCode::MotorDriverFault.into())
-                        .into_with_id(can_id.clone()),
+                    OutgoingFrame::Error(ErrorCode::MotorDriverFault.into()).into_with_id(*can_id),
                 ))
                 .unwrap();
             });
@@ -614,9 +606,7 @@ const APP: () = {
 #[panic_handler]
 #[inline(never)]
 fn my_panic(info: &core::panic::PanicInfo) -> ! {
-    use core::fmt::Debug;
-
-    use defmt::{consts, Debug2Format};
+    use defmt::Debug2Format;
 
     defmt::error!(
         "Panic: \"{:?}\" \nin file {:str} at line {:u32}",
@@ -624,12 +614,16 @@ fn my_panic(info: &core::panic::PanicInfo) -> ! {
         info.location().unwrap().file(),
         info.location().unwrap().line()
     );
-    loop {}
+    loop {
+        core::sync::atomic::spin_loop_hint();
+    }
 }
 
 #[defmt::panic_handler]
 fn defmt_panic() -> ! {
-    loop {}
+    loop {
+        core::sync::atomic::spin_loop_hint();
+    }
 }
 
 #[lang = "eh_personality"]

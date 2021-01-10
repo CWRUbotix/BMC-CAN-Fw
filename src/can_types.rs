@@ -1,8 +1,8 @@
-use bxcan::{Data, ExtendedId, Frame, Id, StandardId};
+use bxcan::Frame;
 
 use core::cmp::Ordering;
 
-use core::convert::{Into, TryFrom};
+use core::convert::TryFrom;
 
 use defmt::Format;
 
