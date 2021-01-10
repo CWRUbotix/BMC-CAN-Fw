@@ -521,7 +521,7 @@ const APP: () = {
             .unwrap();
 
         // We use floats here because the accuracy matters to an extent
-        let volts = (adc_val / 1000) as f32;
+        let volts = (adc_val as f32) / 1000.0;
 
         // this comes from the data sheet
         let current: f32 = ((volts - V_OFF) / (R_SENSE_VAL * AMP_GAIN)) / CURRENT_EXTERNAL_SCALE;
