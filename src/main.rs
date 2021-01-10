@@ -43,13 +43,13 @@ use defmt;
 /// this makes sure that the rtt logger is linked into the binary
 use defmt_rtt as _;
 
-mod can;
+mod can_types;
 mod error_codes;
 mod status;
 
 use error_codes::ErrorCode;
 
-use can::PriorityFrame;
+use can_types::PriorityFrame;
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub enum IdleMode {
@@ -364,7 +364,8 @@ const APP: () = {
 
     #[task(priority = 2, binds = EXTI9_5, resources = [can_id, over_current_pin, fault_pin, can_tx_queue])]
     fn exti9_5(cx: exti9_5::Context) {
-        use can::IntoWithId;
+        use can_types::IntoWithId;
+        use can_types::OutgoingFrame;
 
         let oc_pin = cx.resources.over_current_pin;
         let f_pin = cx.resources.fault_pin;
@@ -377,7 +378,7 @@ const APP: () = {
 
             can_tx_queue.lock(|q| {
                 q.push(allocate_tx_frame(
-                    can::OutgoingFrame::Overcurrent.into_with_id(can_id.clone()),
+                    OutgoingFrame::Overcurrent.into_with_id(can_id.clone()),
                 ))
                 .unwrap();
             });
@@ -389,7 +390,7 @@ const APP: () = {
 
             can_tx_queue.lock(|q| {
                 q.push(allocate_tx_frame(
-                    can::OutgoingFrame::Error(ErrorCode::MotorDriverFault.into())
+                    OutgoingFrame::Error(ErrorCode::MotorDriverFault.into())
                         .into_with_id(can_id.clone()),
                 ))
                 .unwrap();
@@ -495,8 +496,8 @@ const APP: () = {
 
     #[task(capacity = 16, resources=[can_tx_queue, last_can_rx, inverted, current_limit, setpoint, last_heartbeat] )]
     fn handle_rx_frame(cx: handle_rx_frame::Context, frame: Frame) {
-        use can::IncomingFrame;
-        use can::IncomingFrame::*;
+        use can_types::IncomingFrame;
+        use can_types::IncomingFrame::*;
         use core::convert::TryFrom;
 
         let mut last_rx = cx.resources.last_can_rx;
