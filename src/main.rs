@@ -44,9 +44,18 @@ use defmt;
 use defmt_rtt as _;
 
 mod can;
+mod error_codes;
 mod status;
 
+use error_codes::ErrorCode;
+
 use can::PriorityFrame;
+
+#[derive(Eq, PartialEq, Copy, Clone)]
+pub enum IdleMode {
+    Brake,
+    Coast,
+}
 
 const HSE_CLOCK_MHZ: u32 = 8;
 const SYS_CLOCK_MHZ: u32 = 72;
@@ -57,7 +66,13 @@ const SYS_CLOCK_HZ: u32 = SYS_CLOCK_MHZ * 1_000_000;
 const CAN_CONFIG: u32 = 0x001e0001;
 const CAN_TIMEOUT: u32 = SYS_CLOCK_MHZ * 2;
 
+const V_OFF: f32 = 0.050; // volts
+const R_SENSE_VAL: f32 = 0.004; // ohms
+const AMP_GAIN: f32 = 20.0; // 20 V / V
+const CURRENT_EXTERNAL_SCALE: f32 = 10_000.0 / 22_000.0; // from the current divider
+
 // hardware type defs
+type Adc = adc::Adc<pac::ADC1>;
 type DmaPayload = adc::AdcPayload<gpio::gpioa::PA3<gpio::Analog>, adc::Continuous>;
 type AdcDma = stm32f1xx_hal::dma::RxDma<DmaPayload, dma::dma1::C1>;
 
@@ -116,8 +131,8 @@ const APP: () = {
 
         /// adc values from current sense
         adc_buf: dma::CircBuffer<u16, AdcDma>,
-
-        // pwm channels
+        // adc: adc::Adc<pac::ADC1>,
+        /// pwm channels
         motor_high: MotorHighChannel,
         motor_low: MotorLowChannel,
         motor_current_limit: CurrentLimitChannel,
@@ -149,6 +164,9 @@ const APP: () = {
         /// current in amps
         #[init(10)]
         current_limit: u8,
+
+        #[init(IdleMode::Coast)]
+        idle_mode: IdleMode,
     }
 
     #[init(schedule=[update_leds, motor_update])]
@@ -177,6 +195,11 @@ const APP: () = {
 
         let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
+
+        // declare this here, put motor driver in sleep mode while we init
+        let mut sleep_pin = gpioa
+            .pa6
+            .into_push_pull_output_with_state(&mut gpioa.crl, gpio::State::Low);
 
         #[allow(unused_must_use)]
         let can_id = {
@@ -269,6 +292,7 @@ const APP: () = {
 
         motor_high.set_duty(0);
         motor_low.set_duty(0);
+        motor_current_limit.set_duty(0);
 
         let adc_buf = {
             let dma_ch = device.DMA1.split(&mut rcc.ahb).1;
@@ -287,15 +311,17 @@ const APP: () = {
 
         let mut fault_pin = gpioa.pa4.into_floating_input(&mut gpioa.crl);
         let mut over_current_pin = gpioa.pa5.into_floating_input(&mut gpioa.crl);
-        let sleep_pin = gpioa.pa6.into_push_pull_output(&mut gpioa.crl);
 
         over_current_pin.make_interrupt_source(&mut afio);
-        over_current_pin.trigger_on_edge(&exti, gpio::Edge::RISING); // TODO: CHECK this
+        over_current_pin.trigger_on_edge(&exti, gpio::Edge::FALLING); // this has an external pullup
         over_current_pin.enable_interrupt(&exti);
 
         fault_pin.make_interrupt_source(&mut afio);
-        fault_pin.trigger_on_edge(&exti, gpio::Edge::FALLING); // TODO: Check this
+        fault_pin.trigger_on_edge(&exti, gpio::Edge::FALLING); // this has an external pullup
         fault_pin.enable_interrupt(&exti);
+
+        // take motor driver out of sleep mode
+        sleep_pin.set_high().unwrap();
 
         let status1 = status::StatusLed::new(gpiob.pb10.into_push_pull_output(&mut gpiob.crh));
         let status2 = status::StatusLed::new(gpiob.pb11.into_push_pull_output(&mut gpiob.crh));
@@ -360,12 +386,20 @@ const APP: () = {
 
         if f_pin.check_interrupt() {
             defmt::debug!("Motor fault interrupt");
-            // TODO: Handle fault
+
+            can_tx_queue.lock(|q| {
+                q.push(allocate_tx_frame(
+                    can::OutgoingFrame::Error(ErrorCode::MotorDriverFault.into())
+                        .into_with_id(can_id.clone()),
+                ))
+                .unwrap();
+            });
+
             f_pin.clear_interrupt_pending_bit();
         }
     }
 
-    #[task(priority = 1, schedule = [motor_update], resources = [last_heartbeat, motor_low, motor_high, motor_current_limit, setpoint, current_limit, inverted])]
+    #[task(priority = 1, schedule = [motor_update], resources = [last_heartbeat, motor_low, motor_high, motor_current_limit, setpoint, current_limit, inverted, idle_mode])]
     fn motor_update(cx: motor_update::Context) {
         // set pwm signals for setpoint and current limit
         #[cfg(feature = "heartbeat")]
@@ -373,24 +407,31 @@ const APP: () = {
 
         let motor_low = cx.resources.motor_low;
         let motor_high = cx.resources.motor_high;
-        let _motor_current_limit = cx.resources.motor_current_limit;
+        let motor_current_limit = cx.resources.motor_current_limit;
 
-        // TODO: Check heartbeat
         let inverted = *cx.resources.inverted;
         let setpoint = *cx.resources.setpoint * (if inverted { -1 } else { 1 });
+        let idle_mode = *cx.resources.idle_mode;
+        let current_limit = *cx.resources.current_limit;
+
+        let max_duty = motor_low.get_max_duty();
 
         #[cfg(feature = "heartbeat")]
-        let stop = if let Some(last) = last_heartbeat {
+        let mut stop = if let Some(last) = last_heartbeat {
             last.elapsed() > 0.cycles()
         } else {
             true
         };
 
         #[cfg(not(feature = "heartbeat"))]
-        let stop = false;
+        let mut stop = false;
 
+        if setpoint == 0 {
+            stop = true;
+        };
+
+        // make sure this works
         if !stop {
-            // TODO: Check if this works
             let internal_set = setpoint.unsigned_abs();
             if setpoint >= 0 {
                 motor_low.set_duty(0);
@@ -400,12 +441,24 @@ const APP: () = {
                 motor_high.set_duty(0);
             }
         } else {
-            motor_low.set_duty(0);
-            motor_high.set_duty(0);
+            let internal_set = if idle_mode == IdleMode::Coast {
+                0
+            } else {
+                max_duty
+            };
+            motor_low.set_duty(internal_set);
+            motor_high.set_duty(internal_set);
         }
 
         // set current limit
-        // motor_current_limit.set_duty(0);
+        // I wish we could avoid using floating point here
+        // this is from the datasheet
+        let vref =
+            ((current_limit as f32 * AMP_GAIN * R_SENSE_VAL) + V_OFF) * CURRENT_EXTERNAL_SCALE;
+
+        let pwm_val = motor_current_limit.get_max_duty() as f32 * (vref / 3.3);
+
+        motor_current_limit.set_duty(pwm_val as u16);
 
         // schedule this task again
         cx.schedule
@@ -422,6 +475,14 @@ const APP: () = {
                 adc_val = *buf;
             })
             .unwrap();
+
+        // We use floats here because the accuracy matters to an extent
+        let volts = (adc_val / 1000) as f32;
+
+        // this comes from the data sheet
+        let current: f32 = ((volts - V_OFF) / (R_SENSE_VAL * AMP_GAIN)) / CURRENT_EXTERNAL_SCALE;
+
+        defmt::info!("Motor current: {:f32}", current);
 
         // TODO: Do something with the adc_val here
         // do calculations
@@ -442,20 +503,26 @@ const APP: () = {
 
         match IncomingFrame::try_from(frame) {
             Ok(Setpoint(setpoint)) => {
+                defmt::info!("Setting setpoint to {:i16}", setpoint);
                 *cx.resources.setpoint = setpoint;
             }
             Ok(SetCurrentLimit(limit)) => {
+                defmt::info!("Setting current limit to {:u8} amps", limit);
                 *cx.resources.current_limit = limit;
             }
             Ok(Invert(inv)) => {
+                defmt::info!("Setting motor inversion to {:bool}", inv);
                 *cx.resources.inverted = inv;
             }
             #[cfg(feature = "heartbeat")]
-            Ok(HeartBeat) => *cx.resources.last_heartbeat = Some(Instant::now()),
+            Ok(HeartBeat) => {
+                defmt::info!("Heartbeat...");
+                *cx.resources.last_heartbeat = Some(Instant::now());
+            }
             #[cfg(not(feature = "heartbeat"))]
             Ok(HeartBeat) => {}
-
             Ok(Stop) => {
+                defmt::info!("Stopping motor (setpoint = 0)");
                 *cx.resources.setpoint = 0;
             }
             Err(e) => defmt::panic!("{:?}", e),
