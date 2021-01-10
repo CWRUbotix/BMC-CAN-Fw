@@ -16,7 +16,5 @@ jobs:
       - name: Run clippy
         uses: actions-rs/clippy-check@v1
         with:
-{% raw %}
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --target thumbv7m-none-eabi
-{% endraw %}
