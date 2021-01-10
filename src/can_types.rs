@@ -6,6 +6,8 @@ use core::convert::TryFrom;
 
 use defmt::Format;
 
+use crate::error_codes;
+
 pub enum FrameConversionError {
     FrameType,
     InvalidFrame(&'static str),
@@ -116,9 +118,15 @@ pub trait IntoWithId<T> {
 
 #[derive(Format)]
 pub enum OutgoingFrame {
-    Update { current_now: f32, duty_now: i16 },
-    Overcurrent,
-    Error(u8),
+    Update {
+        current_now: f32,
+        duty_now: i16,
+    },
+    Overcurrent {
+        current_now: f32,
+        current_limit: f32,
+    },
+    Error(error_codes::ErrorCode),
 }
 
 impl IntoWithId<Frame> for OutgoingFrame {
@@ -137,12 +145,19 @@ impl IntoWithId<Frame> for OutgoingFrame {
                 bytes.extend_from_slice(duty_now.as_ne_bytes()).unwrap();
                 bytes.extend_from_slice(current_now.as_ne_bytes()).unwrap();
             }
-            OutgoingFrame::Overcurrent => {
+            OutgoingFrame::Overcurrent {
+                current_now,
+                current_limit,
+            } => {
                 new_id |= 0x2 << 8;
+                bytes.extend_from_slice(current_now.as_ne_bytes()).unwrap();
+                bytes
+                    .extend_from_slice(current_limit.as_ne_bytes())
+                    .unwrap();
             }
             OutgoingFrame::Error(code) => {
                 new_id |= 0x0 << 8;
-                bytes.push(code).unwrap();
+                bytes.push(code.into()).unwrap();
             }
         };
 

@@ -160,9 +160,15 @@ const APP: () = {
 
         #[init(IdleMode::Coast)]
         idle_mode: IdleMode,
+
+        #[init(0.0)]
+        current_now: f32,
+
+        #[init(0)]
+        duty_now: i16,
     }
 
-    #[init(schedule=[led_update, motor_update])]
+    #[init(schedule=[led_update, motor_update, send_update])]
     fn init(cx: init::Context) -> init::LateResources {
         let can_tx_queue = BinaryHeap::new();
 
@@ -316,19 +322,29 @@ const APP: () = {
         // take motor driver out of sleep mode
         sleep_pin.set_high().unwrap();
 
-        let status1 = status::StatusLed::new(gpiob.pb10.into_push_pull_output(&mut gpiob.crh));
-        let status2 = status::StatusLed::new(gpiob.pb11.into_push_pull_output(&mut gpiob.crh));
+        let status1 = status::StatusLed::new_with_mode(
+            gpiob.pb10.into_push_pull_output(&mut gpiob.crh),
+            status::LedMode::FlashSlow,
+        );
+        let status2 = status::StatusLed::new_with_mode(
+            gpiob.pb11.into_push_pull_output(&mut gpiob.crh),
+            status::LedMode::FlashSlow,
+        );
 
         peripherals.DCB.enable_trace();
         DWT::unlock();
         peripherals.DWT.enable_cycle_counter();
 
         let now = cx.start;
+
         cx.schedule
             .led_update(now + LED_UPDATE_PD.cycles())
             .unwrap();
         cx.schedule
             .motor_update(now + MOTOR_UPDATE_PD.cycles())
+            .unwrap();
+        cx.schedule
+            .send_update(now + CAN_VALUE_UPDATE_PD.cycles())
             .unwrap();
 
         init::LateResources {
@@ -355,8 +371,36 @@ const APP: () = {
         }
     }
 
-    #[task(priority = 2, binds = EXTI9_5, resources = [can_id, over_current_pin, fault_pin, can_tx_queue])]
-    fn exti9_5(cx: exti9_5::Context) {
+    #[task(priority = 2, schedule = [send_update], resources = [duty_now, current_now, can_tx_queue, can_id])]
+    fn send_update(mut cx: send_update::Context) {
+        use can_types::IntoWithId;
+
+        let can_id: bxcan::Id = cx.resources.can_id.lock(|id| *id);
+
+        let mut can_tx_queue = cx.resources.can_tx_queue;
+
+        let current_now = cx.resources.current_now.lock(|cn| *cn);
+        let duty_now = cx.resources.duty_now.lock(|dn| *dn);
+
+        can_tx_queue
+            .lock(|q| {
+                q.push(allocate_tx_frame(
+                    can_types::OutgoingFrame::Update {
+                        current_now,
+                        duty_now,
+                    }
+                    .into_with_id(can_id),
+                ))
+            })
+            .unwrap();
+
+        cx.schedule
+            .send_update(Instant::now() + CAN_VALUE_UPDATE_PD.cycles())
+            .unwrap();
+    }
+
+    #[task(priority = 5, binds = EXTI9_5, resources = [can_id, over_current_pin, fault_pin, can_tx_queue, current_now, current_limit])]
+    fn exti9_5(mut cx: exti9_5::Context) {
         use can_types::IntoWithId;
         use can_types::OutgoingFrame;
 
@@ -364,35 +408,40 @@ const APP: () = {
         let f_pin = cx.resources.fault_pin;
 
         let can_id = cx.resources.can_id;
-        let mut can_tx_queue = cx.resources.can_tx_queue;
+        let can_tx_queue = cx.resources.can_tx_queue;
 
         if oc_pin.check_interrupt() {
             defmt::debug!("Overcurrent interrupt");
 
-            can_tx_queue.lock(|q| {
-                q.push(allocate_tx_frame(
-                    OutgoingFrame::Overcurrent.into_with_id(*can_id),
+            let current_now = cx.resources.current_now.lock(|cn| *cn);
+            let current_limit = cx.resources.current_limit.lock(|cl| *cl) as f32;
+
+            can_tx_queue
+                .push(allocate_tx_frame(
+                    OutgoingFrame::Overcurrent {
+                        current_now,
+                        current_limit,
+                    }
+                    .into_with_id(*can_id),
                 ))
                 .unwrap();
-            });
             oc_pin.clear_interrupt_pending_bit();
         }
 
         if f_pin.check_interrupt() {
             defmt::debug!("Motor fault interrupt");
 
-            can_tx_queue.lock(|q| {
-                q.push(allocate_tx_frame(
+            can_tx_queue
+                .push(allocate_tx_frame(
                     OutgoingFrame::Error(ErrorCode::MotorDriverFault.into()).into_with_id(*can_id),
                 ))
                 .unwrap();
-            });
 
             f_pin.clear_interrupt_pending_bit();
         }
     }
 
-    #[task(priority = 1, schedule = [motor_update], resources = [last_heartbeat, motor_low, motor_high, motor_current_limit, setpoint, current_limit, inverted, idle_mode])]
+    #[task(priority = 10, schedule = [motor_update], resources = [last_heartbeat, motor_low, motor_high, motor_current_limit, setpoint, current_limit, inverted, idle_mode, duty_now])]
     fn motor_update(cx: motor_update::Context) {
         // set pwm signals for setpoint and current limit
         #[cfg(feature = "heartbeat")]
@@ -407,7 +456,7 @@ const APP: () = {
         let idle_mode = *cx.resources.idle_mode;
         let current_limit = *cx.resources.current_limit;
 
-        let max_duty = motor_low.get_max_duty();
+        let max_duty = motor_low.get_max_duty() as u16;
 
         #[cfg(feature = "heartbeat")]
         let mut stop = if let Some(last) = last_heartbeat {
@@ -453,13 +502,15 @@ const APP: () = {
 
         motor_current_limit.set_duty(pwm_val as u16);
 
+        *cx.resources.duty_now = setpoint;
+
         // schedule this task again
         cx.schedule
             .motor_update(Instant::now() + MOTOR_UPDATE_PD.cycles())
             .unwrap();
     }
 
-    #[task(priority = 2, binds = DMA1_CHANNEL1, resources=[adc_buf])]
+    #[task(priority = 6, binds = DMA1_CHANNEL1, resources=[adc_buf, current_now])]
     fn handle_adc(cx: handle_adc::Context) {
         let adc_buf = cx.resources.adc_buf;
         let mut adc_val = 0_u16;
@@ -477,55 +528,57 @@ const APP: () = {
 
         defmt::info!("Motor current: {:f32}", current);
 
-        // TODO: Do something with the adc_val here
-        // do calculations
-        //
+        *cx.resources.current_now = current;
+
+        // NOTE:
         // we should really do something that takes the vref into account
         // such as: let x = adc_val * 1200 / adc.read_vref();
         // but i dont know how to get the vref value through the dma
         // for now we will just do it the dumb way
     }
 
-    #[task(capacity = 16, resources=[can_tx_queue, last_can_rx, inverted, current_limit, setpoint, last_heartbeat] )]
-    fn handle_rx_frame(cx: handle_rx_frame::Context, frame: Frame) {
+    #[task(priority = 5, capacity = 16, resources=[can_tx_queue, last_can_rx, inverted, current_limit, setpoint, last_heartbeat] )]
+    fn handle_rx_frame(mut cx: handle_rx_frame::Context, frame: Frame) {
         use can_types::IncomingFrame;
         use can_types::IncomingFrame::*;
         use core::convert::TryFrom;
 
-        let mut last_rx = cx.resources.last_can_rx;
+        let last_rx = cx.resources.last_can_rx;
 
         match IncomingFrame::try_from(frame) {
             Ok(Setpoint(setpoint)) => {
                 defmt::info!("Setting setpoint to {:i16}", setpoint);
-                *cx.resources.setpoint = setpoint;
+                cx.resources.setpoint.lock(|s| *s = setpoint);
             }
             Ok(SetCurrentLimit(limit)) => {
                 defmt::info!("Setting current limit to {:u8} amps", limit);
-                *cx.resources.current_limit = limit;
+                cx.resources.current_limit.lock(|cl| *cl = limit);
             }
             Ok(Invert(inv)) => {
                 defmt::info!("Setting motor inversion to {:bool}", inv);
-                *cx.resources.inverted = inv;
+                cx.resources.inverted.lock(|inverted| *inverted = inv);
             }
             #[cfg(feature = "heartbeat")]
             Ok(HeartBeat) => {
                 defmt::info!("Heartbeat...");
-                *cx.resources.last_heartbeat = Some(Instant::now());
+                cx.resources
+                    .last_heartbeat
+                    .lock(|lh| *lh = Some(Instant::now()));
             }
             #[cfg(not(feature = "heartbeat"))]
             Ok(HeartBeat) => {}
             Ok(Stop) => {
                 defmt::info!("Stopping motor (setpoint = 0)");
-                *cx.resources.setpoint = 0;
+                cx.resources.setpoint.lock(|s| *s = 0);
             }
             Err(e) => defmt::panic!("{:?}", e),
         };
 
-        last_rx.lock(|instant: &mut Option<Instant>| *instant = Some(Instant::now()));
+        *last_rx = Some(Instant::now());
         rtic::pend(Interrupt::USB_HP_CAN_TX);
     }
 
-    #[task(priority=3, binds = USB_LP_CAN_RX0, resources=[can_rx], spawn=[handle_rx_frame])]
+    #[task(priority=5, binds = USB_LP_CAN_RX0, resources=[can_rx], spawn=[handle_rx_frame])]
     fn can_rx0(cx: can_rx0::Context) {
         let rx = cx.resources.can_rx;
 
@@ -540,7 +593,7 @@ const APP: () = {
         }
     }
 
-    #[task(priority=3, binds = CAN_RX1)]
+    #[task(priority=4, binds = CAN_RX1)]
     fn can_rx1(_: can_rx1::Context) {
         rtic::pend(Interrupt::USB_LP_CAN_RX0);
     }
@@ -548,14 +601,17 @@ const APP: () = {
     #[task(priority = 3, binds = USB_HP_CAN_TX, resources = [can_tx, can_tx_queue, last_can_rx])]
     fn can_tx(cx: can_tx::Context) {
         let tx = cx.resources.can_tx;
-        let tx_queue = cx.resources.can_tx_queue;
-        let last_rx = cx.resources.last_can_rx;
+        let mut tx_queue = cx.resources.can_tx_queue;
+        let mut last_rx = cx.resources.last_can_rx;
 
-        let can_ok = if let Some(t) = last_rx {
-            !(t.elapsed() > CAN_TIMEOUT.cycles())
-        } else {
-            false
-        };
+        let can_ok = last_rx.lock(|last_rx| {
+            let can_ok = if let Some(t) = last_rx {
+                !(t.elapsed() > CAN_TIMEOUT.cycles())
+            } else {
+                false
+            };
+            can_ok
+        });
 
         tx.clear_interrupt_flags();
 
@@ -564,24 +620,26 @@ const APP: () = {
             return;
         }
 
-        while let Some(frame) = tx_queue.peek() {
-            match tx.transmit(&frame.0) {
-                Ok(None) => {
-                    use core::ops::Deref;
-                    let sent_frame = tx_queue.pop();
-                    defmt::info!("Sent Frame: {:?}", sent_frame.unwrap().deref().0);
+        tx_queue.lock(|tx_queue| {
+            while let Some(frame) = tx_queue.peek() {
+                match tx.transmit(&frame.0) {
+                    Ok(None) => {
+                        use core::ops::Deref;
+                        let sent_frame = tx_queue.pop();
+                        defmt::info!("Sent Frame: {:?}", sent_frame.unwrap().deref().0);
+                    }
+                    Ok(Some(pending_frame)) => {
+                        tx_queue.pop();
+                        tx_queue.push(allocate_tx_frame(pending_frame)).unwrap();
+                    }
+                    Err(nb::Error::WouldBlock) => break,
+                    Err(_) => unreachable!(),
                 }
-                Ok(Some(pending_frame)) => {
-                    tx_queue.pop();
-                    tx_queue.push(allocate_tx_frame(pending_frame)).unwrap();
-                }
-                Err(nb::Error::WouldBlock) => break,
-                Err(_) => unreachable!(),
             }
-        }
+        });
     }
 
-    #[task(priority = 5, resources = [status1, status2], schedule=[led_update])]
+    #[task(priority = 1, resources = [status1, status2], schedule=[led_update])]
     fn led_update(cx: led_update::Context) {
         let status1 = cx.resources.status1;
         let status2 = cx.resources.status2;
@@ -596,7 +654,10 @@ const APP: () = {
 
     #[allow(non_snake_case)]
     extern "C" {
+        fn USART1();
         fn USART2();
+
+        fn ADC3();
 
         fn SPI2();
         fn SPI3();
