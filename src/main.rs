@@ -24,7 +24,7 @@ use stm32f1xx_hal;
 use stm32f1xx_hal::gpio::ExtiPin;
 use stm32f1xx_hal::pac;
 use stm32f1xx_hal::pac::{Interrupt, CAN1};
-use stm32f1xx_hal::{adc, dma, gpio, pwm};
+use stm32f1xx_hal::{adc, can, dma, gpio, pwm, timer};
 
 use bxcan::{filter::Mask32, Can, Frame, Id, Rx, StandardId, Tx};
 
@@ -231,7 +231,7 @@ const APP: () = {
 
         let can_id = StandardId::new(can_id).unwrap();
 
-        let can = stm32f1xx_hal::can::Can::new(device.CAN1, &mut rcc.apb1, device.USB);
+        let can = can::Can::new(device.CAN1, &mut rcc.apb1, device.USB);
 
         {
             let tx_pin = gpiob.pb9.into_alternate_push_pull(&mut gpiob.crh);
@@ -273,7 +273,7 @@ const APP: () = {
                 gpioa.pa11.into_alternate_push_pull(&mut gpioa.crh),
             );
 
-            let mut tim = stm32f1xx_hal::timer::Timer::tim1(device.TIM1, &clocks, &mut rcc.apb2);
+            let mut tim = timer::Timer::tim1(device.TIM1, &clocks, &mut rcc.apb2);
 
             // make sure the pwm timers still run during debug, or else the motors will stop
             tim.stop_in_debug(&mut debug, false);
@@ -299,9 +299,9 @@ const APP: () = {
             let ch0 = gpioa.pa3.into_analog(&mut gpioa.crl);
 
             // setup adc for fast, continous operation.
-            let mut adc = stm32f1xx_hal::adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
+            let mut adc = adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
             adc.set_continuous_mode(true);
-            adc.set_sample_time(adc::SampleTime::T_28);
+            adc.set_sample_time(adc::SampleTime::T_28); // NOTE: we can make this faster or slower if we want
             adc.set_align(adc::Align::Right); // TODO: Check if this is correct
 
             // get singleton buffer and start dma
