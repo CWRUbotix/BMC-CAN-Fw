@@ -1,10 +1,7 @@
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::digital::v2::ToggleableOutputPin;
 
-
 use core::fmt::Debug;
-
-
 
 pub enum LedMode {
     Off = 0,
@@ -38,7 +35,6 @@ where
     }
 
     pub fn update(&mut self) {
-        
         match self.current_mode {
             LedMode::On => self.pin.set_high().unwrap(),
             LedMode::Off => self.pin.set_low().unwrap(),

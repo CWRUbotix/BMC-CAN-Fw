@@ -162,7 +162,7 @@ const APP: () = {
         idle_mode: IdleMode,
     }
 
-    #[init(schedule=[update_leds, motor_update])]
+    #[init(schedule=[led_update, motor_update])]
     fn init(cx: init::Context) -> init::LateResources {
         let can_tx_queue = BinaryHeap::new();
 
@@ -325,7 +325,7 @@ const APP: () = {
 
         let now = cx.start;
         cx.schedule
-            .update_leds(now + LED_UPDATE_PD.cycles())
+            .led_update(now + LED_UPDATE_PD.cycles())
             .unwrap();
         cx.schedule
             .motor_update(now + MOTOR_UPDATE_PD.cycles())
@@ -581,8 +581,8 @@ const APP: () = {
         }
     }
 
-    #[task(priority = 5, resources = [status1, status2], schedule=[update_leds])]
-    fn update_leds(cx: update_leds::Context) {
+    #[task(priority = 5, resources = [status1, status2], schedule=[led_update])]
+    fn led_update(cx: led_update::Context) {
         let status1 = cx.resources.status1;
         let status2 = cx.resources.status2;
 
@@ -590,7 +590,7 @@ const APP: () = {
         status2.update();
 
         cx.schedule
-            .update_leds(Instant::now() + LED_UPDATE_PD.cycles())
+            .led_update(Instant::now() + LED_UPDATE_PD.cycles())
             .unwrap();
     }
 
