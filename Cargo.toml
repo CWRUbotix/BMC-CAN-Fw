@@ -44,8 +44,9 @@ bench = false
 
 [profile.release]
 codegen-units = 1
-debug = true
+debug = false
 debug-assertions = false
+overflow-checks = false
 lto = true
 opt-level = 'z'
 
@@ -62,4 +63,4 @@ opt-level = 'z'
 
 [profile.dev.package.'*']
 opt-level = "z"
-debug = false
+debug = true
