@@ -62,7 +62,7 @@ const CAN_TIMEOUT: u32 = SYS_CLOCK_MHZ * 2;
 const V_OFF: f32 = 0.050; // volts
 const R_SENSE_VAL: f32 = 0.004; // ohms
 const AMP_GAIN: f32 = 20.0; // 20 V / V
-const CURRENT_EXTERNAL_SCALE: f32 = 10_000.0 / 22_000.0; // from the current divider
+const CURRENT_EXTERNAL_SCALE: f32 = 22_000.0 / (22_000.0 + 10_000.0); // from the current divider
 
 // hardware type defs
 type Adc = adc::Adc<pac::ADC1>;
