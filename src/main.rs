@@ -38,33 +38,61 @@ use defmt_rtt as _;
 
 mod can_types;
 mod error_codes;
+mod idle_mode;
 mod status;
+
+use idle_mode::IdleMode;
 
 use error_codes::ErrorCode;
 
 use can_types::PriorityFrame;
 
-#[derive(Eq, PartialEq, Copy, Clone, defmt::Format)]
-pub enum IdleMode {
-    Brake,
-    Coast,
-}
-
+/// Clock speed in mhz of the HSE
 const HSE_CLOCK_MHZ: u32 = 8;
+
+/// System clock speed after scalars in mhz
 const SYS_CLOCK_MHZ: u32 = 72;
 
+/// Clock speed of hse in hz
 const HSE_CLOCK_HZ: u32 = HSE_CLOCK_MHZ * 1_000_000;
+
+/// System clock after scalars in hz
 const SYS_CLOCK_HZ: u32 = SYS_CLOCK_MHZ * 1_000_000;
 
+/// CAN transmitter configuration byte.
+/// This was generated from <http://www.bittiming.can-wiki.info/#bxCAN>
+/// We use a 1 Mbs configuration
 const CAN_CONFIG: u32 = 0x001e0001;
+
+/// Can timeout constant
+/// This represents the number of cycles before we determine that the CAN bus has disconnected
+/// For now, 2 seconds seems fine
 const CAN_TIMEOUT: u32 = SYS_CLOCK_MHZ * 2;
 
+/// The motor deadband
+/// For now, a 1% deadband seems fine
+const MOTOR_DEADBAND_PERCENT: f32 = 0.01;
+
+/// Motor deadband multiplied by the max duty cycle.
+/// Any duty cycle below this value will be set to 0.
+const DEFAULT_MOTOR_DEADBAND: i16 = (i16::MAX as f32 * MOTOR_DEADBAND_PERCENT) as i16;
+
+// The following values are from the motor driver datasheet
+/// `V_OFF` is the value output by the current amplifier when no current is detected
+/// It's basically an offset. We can theoretically adjust this, but I dont think it matters
 const V_OFF: f32 = 0.050; // volts
+
+/// The value of the current sensing shunt resistor in ohms
 const R_SENSE_VAL: f32 = 0.004; // ohms
-const AMP_GAIN: f32 = 20.0; // 20 V / V
+
+/// The gain of the current amplifier  (in Volts / Volt)
+const AMP_GAIN: f32 = 20.0;
+
+/// The scaling factor of the current sense voltage divider.
+/// This also represents the scaling factor of our shop current calculations
 const CURRENT_EXTERNAL_SCALE: f32 = 22_000.0 / (22_000.0 + 10_000.0); // from the current divider
 
-// hardware type defs
+// hardware type defs (these are all self explanatory)
 type Adc = adc::Adc<pac::ADC1>;
 type DmaPayload = adc::AdcPayload<gpio::gpioa::PA3<gpio::Analog>, adc::Continuous>;
 type AdcDma = stm32f1xx_hal::dma::RxDma<DmaPayload, dma::dma1::C1>;
@@ -82,26 +110,40 @@ type Status1 = status::StatusLed<gpio::gpiob::PB10<gpio::Output<gpio::PushPull>>
 type Status2 = status::StatusLed<gpio::gpiob::PB11<gpio::Output<gpio::PushPull>>>;
 
 // timings
+/// This method calculates the number of cycles needed to run a certain periodic
+/// function x times per second
 const fn times_per_second(times: u32) -> u32 {
-    SYS_CLOCK_HZ / times
+    SYS_CLOCK_MHZ / times
 }
 
+/// Motor update period.
+/// 1kHz should be fine since we arent doing anything fancy
 const MOTOR_UPDATE_PD: u32 = times_per_second(1000);
+
+/// Can update period.
+/// We send the current duty cycle and current value here
 const CAN_VALUE_UPDATE_PD: u32 = times_per_second(20);
+
+/// How often we update the leds
+/// This subsequently controls how fast the leds will flash
 const LED_UPDATE_PD: u32 = times_per_second(8);
 
+/// Defmt timestamp function
+/// Used by defmt logger
 #[defmt::timestamp]
 fn timestamp() -> u64 {
     DWT::get_cycle_count() as u64
 }
 
-// can frame pool definition
 heapless::pool! {
+    /// can frame pool definition.
+    /// Allows us to allocate frames similar to allocating on the heap of a normal system
     #[allow(non_upper_case_globals)]
     CanFramePool: PriorityFrame
 }
 
-// can frame pool helper method
+/// Helper function for `CanFramePool`.
+/// Allocates a `bxcan::Frame` in our memory pool
 fn allocate_tx_frame(frame: Frame) -> Box<CanFramePool, heapless::pool::Init> {
     let b = CanFramePool::alloc().unwrap();
     b.init(PriorityFrame(frame))
@@ -110,79 +152,121 @@ fn allocate_tx_frame(frame: Frame) -> Box<CanFramePool, heapless::pool::Init> {
 #[app(device=stm32f1::stm32f103, peripherals = true, monotonic=rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        /// all the CAN bus resources
+        /// The time we last recieved an can frame from the bus
+        /// Used to time out our can transiciever
         #[init(None)]
         last_can_rx: Option<Instant>,
+
+        /// The Can id of this board,
+        /// calculated using the dip switches on the board
         can_id: bxcan::Id,
+
+        /// Can transmitter
         can_tx: Tx<stm32f1xx_hal::can::Can<pac::CAN1>>,
+
+        /// Can reciever
         can_rx: Rx<stm32f1xx_hal::can::Can<pac::CAN1>>,
+
+        /// Queue for outgoing can frames.
+        /// This will send the frames in order of priority,
+        /// such as in the CAN standard (lower id means higher priority)
         can_tx_queue: heapless::BinaryHeap<
             Box<CanFramePool, heapless::pool::Init>,
             consts::U16,
             heapless::binary_heap::Max,
         >,
 
-        /// adc values from current sense
+        /// circular adc buffer. This allows us to coninuously read from the
+        /// current sensing circuit without interruption. Data will be stored in
+        /// two "Halves" of the buffer. One will be filled while the other is being processed.
         adc_buf: dma::CircBuffer<u16, AdcDma>,
-        // adc: adc::Adc<pac::ADC1>,
-        /// pwm channels
+
+        /// Motor high pwm channel. Controls forward duty cycle.
         motor_high: MotorHighChannel,
+
+        /// Motor low pwm channel. Controls reverse duty cycle.
         motor_low: MotorLowChannel,
+
+        /// Pwm channel thats converted to a constant voltage used to set chop current
         motor_current_limit: CurrentLimitChannel,
 
-        // gpio
+        /// Gpio pin that signals motor controller faults
+        /// Will activate interrupt when signal goes low.
         fault_pin: FaultPin,
+
+        /// Gpio output pin that allows us to set the sleep mode of the
+        /// motor controller chip. If we set this output low, the motor controller
+        /// chip will be put into sleep mode
         sleep_pin: SleepPin,
+
+        /// Gpio input that signals an overcurrent event.
+        /// Will trigger an interrupt when pulled low
         over_current_pin: OverCurrentPin,
 
-        // status
+        /// First status LED
         status1: Status1,
+
+        /// Second status LED
         status2: Status2,
 
-        //software variables
-        /// Im not sure if we need this, since the estop cuts the power
+        /// Last heartbeat recieved. If we dont recieve a heartbeat for a certain time
+        /// period, we should stop the motor
+        /// NOTE: Im not sure if we need this, since the estop cuts the power
         #[cfg(feature = "heartbeat")]
         #[init(None)]
         last_heartbeat: Option<Instant>,
 
-        /// setpoint duty cycle
+        /// duty cycle setpoint
         /// I made this an i16 instead of a float
         /// because I want to avoid floating point operations
         #[init(0)]
         setpoint: i16,
 
+        /// Variable indicating motor inversion
+        /// if this value is set to true, all setpoints recieved are negated
         #[init(false)]
         inverted: bool,
 
-        /// current in amps
+        /// current limit in amps
         #[init(10)]
         current_limit: u8,
 
+        /// Idle mode variable. This value is used when motor setpoint is 0 or below a certain
+        /// threshold
         #[init(IdleMode::Coast)]
         idle_mode: IdleMode,
 
+        /// Most recent current value in amps
         #[init(0.0)]
         current_now: f32,
 
+        /// Most recent duty cycle value
         #[init(0)]
         duty_now: i16,
     }
 
+    /// Initialization function
+    /// Here we initialize hardware peripherals and setup software variables
     #[init(schedule=[led_update, motor_update, send_update])]
     fn init(cx: init::Context) -> init::LateResources {
+        // Create tx queue
         let can_tx_queue = BinaryHeap::new();
 
+        // grow our can memory pool
         CanFramePool::grow(cortex_m::singleton!(: [u8; 1024] = [0; 1024]).unwrap());
 
+        // take peripheral and device instances
         let mut peripherals = cx.core;
         let device: stm32f1xx_hal::stm32::Peripherals = cx.device;
 
+        // take seperate peripheral instances for future initialization purposes
         let mut flash = device.FLASH.constrain();
         let mut rcc = device.RCC.constrain();
         let mut afio = device.AFIO.constrain(&mut rcc.apb2);
         let mut debug = device.DBGMCU;
         let exti = device.EXTI;
 
+        // configure the system clocks
         let clocks = rcc
             .cfgr
             .use_hse(HSE_CLOCK_MHZ.mhz())
@@ -192,21 +276,23 @@ const APP: () = {
             .pclk2(SYS_CLOCK_MHZ.mhz())
             .freeze(&mut flash.acr);
 
+        // take gpio instances
         let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
 
-        // declare this here, put motor driver in sleep mode while we init
+        // initalize motor sleep pin, pull this low before motor does something weird
         let mut sleep_pin = gpioa
             .pa6
             .into_push_pull_output_with_state(&mut gpioa.crl, gpio::State::Low);
 
+        // get the system can id from the dip switches
         #[allow(unused_must_use)]
         let can_id = {
             let mut id = 0_u16;
             let mut pins =
                 heapless::Vec::<gpio::Pxx<gpio::Input<gpio::PullDown>>, consts::U8>::new();
 
-            // disable jtag
+            // disable jtag. If we dont do this, we will have issues
             let (_, pb3, pb4) = afio.mapr.disable_jtag(gpioa.pa15, gpiob.pb3, gpiob.pb4);
 
             // put all can_id pins in a vec
@@ -228,10 +314,13 @@ const APP: () = {
             id
         };
 
+        // wrap the can id
         let can_id = StandardId::new(can_id).unwrap();
 
+        // create can peripheral instance
         let can = can::Can::new(device.CAN1, &mut rcc.apb1, device.USB);
 
+        // assign pins to can interface
         {
             let tx_pin = gpiob.pb9.into_alternate_push_pull(&mut gpiob.crh);
             let rx_pin = gpiob.pb8.into_floating_input(&mut gpiob.crh);
@@ -239,31 +328,43 @@ const APP: () = {
             can.assign_pins((tx_pin, rx_pin), &mut afio.mapr);
         }
 
+        // create bxcan can instance
         let mut can = bxcan::Can::new(can);
 
+        // set can config
         can.configure(|config| {
             config.set_bit_timing(CAN_CONFIG);
 
+            // we dont need these at alll. Dont bother
             config.set_silent(false);
             config.set_loopback(false);
         });
 
+        // create mask, we only care about the first byte of the id
         let can_id_mask = StandardId::new(0xFF).unwrap();
+
+        // configure filters with our settings
         let mut can_filters = can.modify_filters();
         can_filters.enable_bank(0, Mask32::frames_with_std_id(can_id, can_id_mask));
         drop(can_filters);
 
+        // enable desired interrupts
         use bxcan::Interrupts;
         can.enable_interrupts(
             Interrupts::FIFO0_MESSAGE_PENDING | Interrupts::FIFO1_MESSAGE_PENDING,
         );
 
+        // enable can interface
+        // this would block, so we must tell the program this is ok
         nb::block!(can.enable()).unwrap();
 
+        // wrap can id again
         let can_id = bxcan::Id::Standard(can_id);
 
+        // split can peripheral into tx and rx
         let (can_tx, can_rx) = can.split();
 
+        // create the pwm channels
         let (_, mut motor_high, mut motor_low, mut motor_current_limit) = {
             let tim_pins = (
                 gpioa.pa8.into_alternate_push_pull(&mut gpioa.crh),
@@ -285,36 +386,49 @@ const APP: () = {
             .split()
         };
 
+        // enable pwm channels
         motor_high.enable();
         motor_low.enable();
         motor_current_limit.enable();
 
+        // set duty of all 3 channels to 0 for now
         motor_high.set_duty(0);
         motor_low.set_duty(0);
         motor_current_limit.set_duty(0);
 
+        // setup dma transfer for current sensing circuit
         let adc_buf = {
+            // split a dma channel
             let dma_ch = device.DMA1.split(&mut rcc.ahb).1;
+
+            // get our desired analog pin
             let ch0 = gpioa.pa3.into_analog(&mut gpioa.crl);
 
             // setup adc for fast, continous operation.
             let mut adc = adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
+
+            // set continous mode, this means the dma will run continuosly
             adc.set_continuous_mode(true);
             adc.set_sample_time(adc::SampleTime::T_28); // NOTE: we can make this faster or slower if we want
             adc.set_align(adc::Align::Right); // TODO: Check if this is correct
 
             // get singleton buffer and start dma
             let buf = cortex_m::singleton!(: [u16; 2] = [0; 2]).unwrap();
+
+            // start circular read
             adc.with_dma(ch0, dma_ch).circ_read(buf)
         };
 
+        // create fault and overcurrent pins
         let mut fault_pin = gpioa.pa4.into_floating_input(&mut gpioa.crl);
         let mut over_current_pin = gpioa.pa5.into_floating_input(&mut gpioa.crl);
 
+        // setup over current interrupt
         over_current_pin.make_interrupt_source(&mut afio);
         over_current_pin.trigger_on_edge(&exti, gpio::Edge::FALLING); // this has an external pullup
         over_current_pin.enable_interrupt(&exti);
 
+        // setup over current interrupt
         fault_pin.make_interrupt_source(&mut afio);
         fault_pin.trigger_on_edge(&exti, gpio::Edge::FALLING); // this has an external pullup
         fault_pin.enable_interrupt(&exti);
@@ -322,6 +436,7 @@ const APP: () = {
         // take motor driver out of sleep mode
         sleep_pin.set_high().unwrap();
 
+        // crate status leds
         let status1 = status::StatusLed::new_with_mode(
             gpiob.pb10.into_push_pull_output(&mut gpiob.crh),
             status::LedMode::FlashSlow,
@@ -331,12 +446,13 @@ const APP: () = {
             status::LedMode::FlashSlow,
         );
 
+        // enable cycle counter
         peripherals.DCB.enable_trace();
         DWT::unlock();
         peripherals.DWT.enable_cycle_counter();
 
+        // start periodic functions
         let now = cx.start;
-
         cx.schedule
             .led_update(now + LED_UPDATE_PD.cycles())
             .unwrap();
@@ -364,6 +480,7 @@ const APP: () = {
         }
     }
 
+    /// idle function. Does nothing for now
     #[idle()]
     fn idle(_cx: idle::Context) -> ! {
         loop {
@@ -375,13 +492,13 @@ const APP: () = {
     fn send_update(mut cx: send_update::Context) {
         use can_types::IntoWithId;
 
+        // get resources
         let can_id: bxcan::Id = cx.resources.can_id.lock(|id| *id);
-
         let mut can_tx_queue = cx.resources.can_tx_queue;
-
         let current_now = cx.resources.current_now.lock(|cn| *cn);
         let duty_now = cx.resources.duty_now.lock(|dn| *dn);
 
+        // push an update frame to the queue
         can_tx_queue
             .lock(|q| {
                 q.push(allocate_tx_frame(
@@ -394,6 +511,7 @@ const APP: () = {
             })
             .unwrap();
 
+        // schedule this task again
         cx.schedule
             .send_update(Instant::now() + CAN_VALUE_UPDATE_PD.cycles())
             .unwrap();
@@ -404,18 +522,21 @@ const APP: () = {
         use can_types::IntoWithId;
         use can_types::OutgoingFrame;
 
+        // get resources
         let oc_pin = cx.resources.over_current_pin;
         let f_pin = cx.resources.fault_pin;
-
         let can_id = cx.resources.can_id;
         let can_tx_queue = cx.resources.can_tx_queue;
 
+        // check overcurrent interrupt
         if oc_pin.check_interrupt() {
             defmt::debug!("Overcurrent interrupt");
 
+            // get nesessary variables
             let current_now = cx.resources.current_now.lock(|cn| *cn);
             let current_limit = cx.resources.current_limit.lock(|cl| *cl) as f32;
 
+            // push overcurrent frame
             can_tx_queue
                 .push(allocate_tx_frame(
                     OutgoingFrame::Overcurrent {
@@ -428,9 +549,11 @@ const APP: () = {
             oc_pin.clear_interrupt_pending_bit();
         }
 
+        // check fault interrupt
         if f_pin.check_interrupt() {
             defmt::debug!("Motor fault interrupt");
 
+            // push error frame
             can_tx_queue
                 .push(allocate_tx_frame(
                     OutgoingFrame::Error(ErrorCode::MotorDriverFault.into()).into_with_id(*can_id),
@@ -441,6 +564,9 @@ const APP: () = {
         }
     }
 
+    /// motor update periodic task
+    /// this runs at a high rate
+    /// we set duty cycles and current limit here
     #[task(priority = 10, schedule = [motor_update], resources = [last_heartbeat, motor_low, motor_high, motor_current_limit, setpoint, current_limit, inverted, idle_mode, duty_now])]
     fn motor_update(cx: motor_update::Context) {
         // set pwm signals for setpoint and current limit
@@ -468,7 +594,7 @@ const APP: () = {
         #[cfg(not(feature = "heartbeat"))]
         let mut stop = false;
 
-        if setpoint == 0 {
+        if setpoint.abs() < DEFAULT_MOTOR_DEADBAND {
             stop = true;
         };
 
