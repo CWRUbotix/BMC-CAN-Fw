@@ -47,6 +47,7 @@ const HSE_CLOCK_MHZ: u32 = 8;
 const SYS_CLOCK_MHZ: u32 = 72;
 
 /// Clock speed of hse in hz
+#[allow(dead_code)]
 const HSE_CLOCK_HZ: u32 = HSE_CLOCK_MHZ * 1_000_000;
 
 /// System clock after scalars in hz
@@ -86,7 +87,6 @@ const AMP_GAIN: f32 = 20.0;
 const CURRENT_EXTERNAL_SCALE: f32 = 22_000.0 / (22_000.0 + 10_000.0); // from the current divider
 
 // hardware type defs (these are all self explanatory)
-type Adc = adc::Adc<pac::ADC1>;
 type DmaPayload = adc::AdcPayload<gpio::gpioa::PA3<gpio::Analog>, adc::Continuous>;
 type AdcDma = stm32f1xx_hal::dma::RxDma<DmaPayload, dma::dma1::C1>;
 
@@ -251,6 +251,14 @@ const APP: () = {
         // take peripheral and device instances
         let mut peripherals = cx.core;
         let device: stm32f1xx_hal::stm32::Peripherals = cx.device;
+
+        // https://github.com/probe-rs/probe-rs/issues/350#issuecomment-742825415
+        device.DBGMCU.cr.modify(|_, w| {
+            w.dbg_sleep().set_bit();
+            w.dbg_standby().set_bit();
+            w.dbg_stop().set_bit()
+        });
+        device.RCC.ahbenr.modify(|_, w| w.dma1en().enabled());
 
         // take seperate peripheral instances for future initialization purposes
         let mut flash = device.FLASH.constrain();
@@ -481,7 +489,8 @@ const APP: () = {
     #[idle()]
     fn idle(_cx: idle::Context) -> ! {
         loop {
-            core::hint::spin_loop();
+            cortex_m::asm::nop();
+            cortex_m::asm::wfi();
         }
     }
 
@@ -803,6 +812,9 @@ const APP: () = {
 
         fn SPI2();
         fn SPI3();
+
+        fn EXTI1();
+        fn EXTI2();
     }
 };
 

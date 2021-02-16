@@ -9,11 +9,17 @@ use defmt::Format;
 use crate::error_codes;
 
 pub enum FrameConversionError {
+    #[allow(dead_code)]
     FrameType,
     InvalidFrame(&'static str),
-    TooShort { minimum: u8, actual: u8 },
+    TooShort {
+        minimum: u8,
+        actual: u8,
+    },
     InvalidIdFormat,
-    InvalidCommand { cmd: u16 },
+    InvalidCommand {
+        cmd: u16,
+    },
 }
 
 impl Format for FrameConversionError {

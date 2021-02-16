@@ -62,6 +62,7 @@ debug = false
 codegen-units = 1
 debug = 2
 debug-assertions = false
+overflow-checks = false
 lto = true
 opt-level = 'z'
 
