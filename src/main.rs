@@ -111,7 +111,7 @@ const fn times_per_second(times: u32) -> u32 {
 
 /// Motor update period.
 /// 1kHz should be fine since we arent doing anything fancy
-const MOTOR_UPDATE_PD: u32 = times_per_second(1000);
+const MOTOR_UPDATE_PD: u32 = times_per_second(100);
 
 /// Can update period.
 /// We send the current duty cycle and current value here
@@ -240,7 +240,7 @@ const APP: () = {
 
     /// Initialization function
     /// Here we initialize hardware peripherals and setup software variables
-    #[init(schedule=[led_update, motor_update, send_update])]
+    #[init(schedule=[led_update, motor_update, can_tx ])]
     fn init(cx: init::Context) -> init::LateResources {
         // Create tx queue
         let can_tx_queue = BinaryHeap::new();
@@ -455,7 +455,7 @@ const APP: () = {
             .motor_update(now + MOTOR_UPDATE_PD.cycles())
             .unwrap();
         cx.schedule
-            .send_update(now + CAN_VALUE_UPDATE_PD.cycles())
+            .can_tx(now + CAN_VALUE_UPDATE_PD.cycles())
             .unwrap();
 
         defmt::info!("End of init");
@@ -485,7 +485,7 @@ const APP: () = {
         }
     }
 
-    #[task(priority = 2, schedule = [send_update], resources = [duty_now, current_now, can_tx_queue, can_id])]
+    #[task(capacity = 8, priority = 2, resources = [duty_now, current_now, can_tx_queue, can_id])]
     fn send_update(mut cx: send_update::Context) {
         defmt::trace!("Send update");
         use can_types::IntoWithId;
@@ -510,12 +510,12 @@ const APP: () = {
             .unwrap();
 
         // schedule this task again
-        cx.schedule
-            .send_update(Instant::now() + CAN_VALUE_UPDATE_PD.cycles())
-            .unwrap();
+        // cx.schedule
+        //     .send_update(Instant::now() + CAN_VALUE_UPDATE_PD.cycles())
+        //     .unwrap();
     }
 
-    #[task(priority = 5, binds = EXTI9_5, resources = [can_id, over_current_pin, fault_pin, can_tx_queue, current_now, current_limit])]
+    #[task(priority = 9, binds = EXTI9_5, resources = [can_id, over_current_pin, fault_pin, can_tx_queue, current_now, current_limit])]
     fn exti9_5(mut cx: exti9_5::Context) {
         defmt::trace!("Exti95");
         use can_types::IntoWithId;
@@ -532,7 +532,7 @@ const APP: () = {
             defmt::debug!("Overcurrent interrupt");
 
             // get nesessary variables
-            let current_now = cx.resources.current_now.lock(|cn| *cn);
+            let current_now = *cx.resources.current_now;
             let current_limit = cx.resources.current_limit.lock(|cl| *cl) as f32;
 
             // push overcurrent frame
@@ -636,8 +636,8 @@ const APP: () = {
             .unwrap();
     }
 
-    #[task(priority = 6, binds = DMA1_CHANNEL1, resources=[adc_buf, current_now])]
-    fn handle_adc(cx: handle_adc::Context) {
+    #[task(priority = 5, binds = DMA1_CHANNEL1, resources=[adc_buf, current_now])]
+    fn handle_adc(mut cx: handle_adc::Context) {
         defmt::trace!("Reading adc");
         let adc_buf = cx.resources.adc_buf;
         let mut adc_val = 0_u16;
@@ -655,7 +655,7 @@ const APP: () = {
 
         defmt::info!("Motor current: {:f32}", current);
 
-        *cx.resources.current_now = current;
+        cx.resources.current_now.lock(|c| *c = current);
         defmt::info!("Done reading adc");
 
         // NOTE:
@@ -725,32 +725,34 @@ const APP: () = {
         }
     }
 
-    #[task(priority=4, binds = CAN_RX1)]
+    #[task(priority=5, binds = CAN_RX1)]
     fn can_rx1(_: can_rx1::Context) {
         rtic::pend(Interrupt::USB_LP_CAN_RX0);
     }
 
-    #[task(priority = 3, binds = USB_HP_CAN_TX, resources = [can_tx, can_tx_queue, last_can_rx])]
+    #[task(priority = 4, schedule=[can_tx], spawn=[send_update], resources = [can_tx, can_tx_queue, last_can_rx])]
     fn can_tx(cx: can_tx::Context) {
         let tx = cx.resources.can_tx;
         let mut tx_queue = cx.resources.can_tx_queue;
         let mut last_rx = cx.resources.last_can_rx;
 
-        let can_ok = last_rx.lock(|last_rx| {
-            let can_ok = if let Some(t) = last_rx {
-                !(t.elapsed() > CAN_TIMEOUT.cycles())
-            } else {
-                false
-            };
-            can_ok
-        });
+        let can_ok = if let Some(t) = last_rx.lock(|rx| *rx) {
+            !(t.elapsed() > CAN_TIMEOUT.cycles())
+        } else {
+            false
+        };
 
         tx.clear_interrupt_flags();
 
         if !can_ok {
             defmt::debug!("Canbus timeout, waiting for recieved frame before tx");
-            return;
+            cx.schedule
+                .can_tx(Instant::now() + CAN_VALUE_UPDATE_PD.cycles())
+                .unwrap();
         }
+
+        // queue an update frame
+        // cx.spawn.send_update().unwrap();
 
         tx_queue.lock(|tx_queue| {
             while let Some(frame) = tx_queue.peek() {
@@ -769,9 +771,13 @@ const APP: () = {
                 }
             }
         });
+
+        cx.schedule
+            .can_tx(Instant::now() + CAN_VALUE_UPDATE_PD.cycles())
+            .unwrap();
     }
 
-    #[task(priority = 1, resources = [status1, status2], schedule=[led_update])]
+    #[task(priority = 5, resources = [status1, status2], schedule=[led_update])]
     fn led_update(cx: led_update::Context) {
         defmt::trace!("Updating leds");
         let status1 = cx.resources.status1;
@@ -789,6 +795,9 @@ const APP: () = {
     extern "C" {
         fn USART1();
         fn USART2();
+
+        fn UART4();
+        fn UART5();
 
         fn ADC3();
 
