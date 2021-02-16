@@ -83,6 +83,11 @@ where
     }
 
     #[inline]
+    pub fn force_on(&mut self) {
+        self.pin.set_high().unwrap();
+    }
+
+    #[inline]
     pub fn force_off(&mut self) {
         self.pin.set_low().unwrap();
     }

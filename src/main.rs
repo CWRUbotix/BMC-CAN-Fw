@@ -1,13 +1,6 @@
-#![feature(
-    lang_items,
-    panic_info_message,
-    fmt_as_str,
-    num_as_ne_bytes,
-    unsigned_abs
-)]
+#![feature(lang_items, panic_info_message, fmt_as_str, num_as_ne_bytes)]
 #![no_std]
 #![no_main]
-#![allow(dead_code)]
 
 use embedded_hal::prelude::*;
 use stm32f1xx_hal::prelude::*;
@@ -113,7 +106,7 @@ type Status2 = status::StatusLed<gpio::gpiob::PB11<gpio::Output<gpio::PushPull>>
 /// This method calculates the number of cycles needed to run a certain periodic
 /// function x times per second
 const fn times_per_second(times: u32) -> u32 {
-    SYS_CLOCK_MHZ / times
+    SYS_CLOCK_HZ / times
 }
 
 /// Motor update period.
@@ -308,11 +301,13 @@ const APP: () = {
             // interate over the pins and shift values as we go
             for (shift, pin) in pins.iter().enumerate() {
                 id |= (pin.is_high().unwrap() as u16) << (shift as u16);
-                defmt::debug!("Id so far: {:u16}", id);
+                // defmt::debug!("Id so far: {:u16}", id);
             }
             pins.clear(); // just to make sure this happens.
             id
         };
+
+        defmt::info!("Can Id: {:u16}", can_id);
 
         // wrap the can id
         let can_id = StandardId::new(can_id).unwrap();
@@ -463,6 +458,8 @@ const APP: () = {
             .send_update(now + CAN_VALUE_UPDATE_PD.cycles())
             .unwrap();
 
+        defmt::info!("End of init");
+
         init::LateResources {
             can_id,
             can_tx_queue,
@@ -484,12 +481,13 @@ const APP: () = {
     #[idle()]
     fn idle(_cx: idle::Context) -> ! {
         loop {
-            core::sync::atomic::spin_loop_hint();
+            core::hint::spin_loop();
         }
     }
 
     #[task(priority = 2, schedule = [send_update], resources = [duty_now, current_now, can_tx_queue, can_id])]
     fn send_update(mut cx: send_update::Context) {
+        defmt::trace!("Send update");
         use can_types::IntoWithId;
 
         // get resources
@@ -519,6 +517,7 @@ const APP: () = {
 
     #[task(priority = 5, binds = EXTI9_5, resources = [can_id, over_current_pin, fault_pin, can_tx_queue, current_now, current_limit])]
     fn exti9_5(mut cx: exti9_5::Context) {
+        defmt::trace!("Exti95");
         use can_types::IntoWithId;
         use can_types::OutgoingFrame;
 
@@ -569,6 +568,7 @@ const APP: () = {
     /// we set duty cycles and current limit here
     #[task(priority = 10, schedule = [motor_update], resources = [last_heartbeat, motor_low, motor_high, motor_current_limit, setpoint, current_limit, inverted, idle_mode, duty_now])]
     fn motor_update(cx: motor_update::Context) {
+        defmt::trace!("MotorUpdate");
         // set pwm signals for setpoint and current limit
         #[cfg(feature = "heartbeat")]
         let last_heartbeat = cx.resources.last_heartbeat;
@@ -638,6 +638,7 @@ const APP: () = {
 
     #[task(priority = 6, binds = DMA1_CHANNEL1, resources=[adc_buf, current_now])]
     fn handle_adc(cx: handle_adc::Context) {
+        defmt::trace!("Reading adc");
         let adc_buf = cx.resources.adc_buf;
         let mut adc_val = 0_u16;
         adc_buf
@@ -655,6 +656,7 @@ const APP: () = {
         defmt::info!("Motor current: {:f32}", current);
 
         *cx.resources.current_now = current;
+        defmt::info!("Done reading adc");
 
         // NOTE:
         // we should really do something that takes the vref into account
@@ -771,6 +773,7 @@ const APP: () = {
 
     #[task(priority = 1, resources = [status1, status2], schedule=[led_update])]
     fn led_update(cx: led_update::Context) {
+        defmt::trace!("Updating leds");
         let status1 = cx.resources.status1;
         let status2 = cx.resources.status2;
 
@@ -806,14 +809,14 @@ fn my_panic(info: &core::panic::PanicInfo) -> ! {
         info.location().unwrap().line()
     );
     loop {
-        core::sync::atomic::spin_loop_hint();
+        core::hint::spin_loop();
     }
 }
 
 #[defmt::panic_handler]
 fn defmt_panic() -> ! {
     loop {
-        core::sync::atomic::spin_loop_hint();
+        core::hint::spin_loop();
     }
 }
 

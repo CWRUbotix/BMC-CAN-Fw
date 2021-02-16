@@ -8,34 +8,38 @@ readme = "README.md"
 [dependencies]
 cortex-m = "0.6.0"
 cortex-m-rt = "0.6.10"
-# cortex-m-semihosting = "0.3.4"
 cortex-m-rtic = "0.5.5"
 stm32f1 = "0.11.0"
 embedded-hal = "0.2.3"
 nb = "1.0.0"
 volatile = "0.3.0"
 heapless = ""
-bxcan = "0.3"
+bxcan = "0.4"
 defmt = "0.1"
 defmt-rtt = "0.1"
 bitfield = "0.13.2"
+# bxcan = "0.4.0"
 # asm-delay = "0.9"
 
 [features]
 heartbeat = []
+logging = ["defmt-trace"]
+
+defmt-info = []
 defmt-debug = []
+defmt-trace = []
 
 default = [
-    "defmt-debug", "heartbeat"
+    "heartbeat"
 ]
 
 [dependencies.stm32f1xx-hal]
 version = ""
-features = ["stm32f103", "rt", "stm32-usbd"]
+features = ["stm32f103", "rt", "stm32-usbd", "has-can", "doc"]
 
 [patch.crates-io]
 stm32f1xx-hal = { git = "https://github.com/timokroeger/stm32f1xx-hal", branch="bxcan", features = ["stm32f103", "rt", "stm32-usbd", "has-can"] }
-bxcan = {git = "https://github.com/stm32-rs/bxcan" }
+# bxcan = {git = "https://github.com/stm32-rs/bxcan" }
 
 [[bin]]
 name = "bmc-can-rs"
@@ -56,11 +60,11 @@ debug = false
 
 [profile.dev]
 codegen-units = 1
-debug = true
+debug = 2
 debug-assertions = false
 lto = true
 opt-level = 'z'
 
 [profile.dev.package.'*']
 opt-level = "z"
-debug = true
+debug = 2
