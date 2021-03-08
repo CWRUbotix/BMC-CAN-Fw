@@ -1,4 +1,4 @@
-#![feature(lang_items, panic_info_message, fmt_as_str, num_as_ne_bytes)]
+#![feature(lang_items, panic_info_message, num_as_ne_bytes)]
 #![no_std]
 #![no_main]
 
@@ -12,7 +12,7 @@ use cortex_m::peripheral::DWT;
 use rtic::app;
 use rtic::cyccnt::{Instant, U32Ext as _};
 
-use stm32f1xx_hal::gpio::ExtiPin;
+use stm32f1xx_hal::gpio::{ExtiPin, IOPinSpeed, OutputSpeed};
 use stm32f1xx_hal::pac;
 use stm32f1xx_hal::pac::Interrupt;
 use stm32f1xx_hal::{adc, can, dma, gpio, pwm, timer};
@@ -86,9 +86,15 @@ const AMP_GAIN: f32 = 20.0;
 /// This also represents the scaling factor of our shop current calculations
 const CURRENT_EXTERNAL_SCALE: f32 = 22_000.0 / (22_000.0 + 10_000.0); // from the current divider
 
+const CAN_QUEUE_DEPTH: usize = 128;
+const CAN_QUEUE_BYTES: usize = core::mem::size_of::<PriorityFrame>() * CAN_QUEUE_DEPTH;
+
 // hardware type defs (these are all self explanatory)
 type DmaPayload = adc::AdcPayload<gpio::gpioa::PA3<gpio::Analog>, adc::Continuous>;
 type AdcDma = stm32f1xx_hal::dma::RxDma<DmaPayload, dma::dma1::C1>;
+
+const ADC_BUF_LEN: usize = 64;
+type AdcBuf = [u16; ADC_BUF_LEN]; // thicc buffer
 
 type PwmChannel<C> = pwm::PwmChannel<pac::TIM1, C>;
 type MotorHighChannel = PwmChannel<pwm::C2>;
@@ -111,7 +117,7 @@ const fn times_per_second(times: u32) -> u32 {
 
 /// Motor update period.
 /// 1kHz should be fine since we arent doing anything fancy
-const MOTOR_UPDATE_PD: u32 = times_per_second(100);
+const MOTOR_UPDATE_PD: u32 = times_per_second(500);
 
 /// Can update period.
 /// We send the current duty cycle and current value here
@@ -134,8 +140,6 @@ fn allocate_tx_frame(frame: Frame) -> Box<CanFramePool, heapless::pool::Init> {
     let b = CanFramePool::alloc().unwrap();
     b.init(PriorityFrame(frame))
 }
-
-type AdcBuf = [u16; 16];
 
 #[app(device=stm32f1xx_hal::stm32, peripherals = true, monotonic=rtic::cyccnt::CYCCNT)]
 const APP: () = {
@@ -167,10 +171,10 @@ const APP: () = {
         /// circular adc buffer. This allows us to coninuously read from the
         /// current sensing circuit without interruption. Data will be stored in
         /// two "Halves" of the buffer. One will be filled while the other is being processed.
-        // adc_buf: dma::CircBuffer<AdcBuf, AdcDma>,
-        adc: adc::Adc<pac::ADC1>,
-        adc_pin: gpio::gpioa::PA3<gpio::Analog>,
+        adc_buf: dma::CircBuffer<AdcBuf, AdcDma>,
 
+        // adc: adc::Adc<pac::ADC1>,
+        // adc_pin: gpio::gpioa::PA3<gpio::Analog>,
         /// Motor high pwm channel. Controls forward duty cycle.
         motor_high: MotorHighChannel,
 
@@ -237,13 +241,15 @@ const APP: () = {
 
     /// Initialization function
     /// Here we initialize hardware peripherals and setup software variables
-    #[init(schedule=[led_update, motor_update, can_tx, handle_adc ])]
+    #[init(schedule=[led_update, motor_update, can_tx])]
     fn init(cx: init::Context) -> init::LateResources {
         // Create tx queue
         let can_tx_queue = BinaryHeap::new();
 
         // grow our can memory pool
-        CanFramePool::grow(cortex_m::singleton!(: [u8; 1024] = [0; 1024]).unwrap());
+        CanFramePool::grow(
+            cortex_m::singleton!(: [u8; CAN_QUEUE_BYTES] = [0; CAN_QUEUE_BYTES]).unwrap(),
+        );
 
         // take peripheral and device instances
         let mut peripherals = cx.core;
@@ -256,6 +262,7 @@ const APP: () = {
             w.dbg_stop().set_bit()
         });
         device.RCC.ahbenr.modify(|_, w| w.dma1en().enabled());
+        device.RCC.ahbenr.modify(|_, w| w.dma2en().enabled());
 
         // take seperate peripheral instances for future initialization purposes
         let mut flash = device.FLASH.constrain();
@@ -272,6 +279,7 @@ const APP: () = {
             .hclk(SYS_CLOCK_MHZ.mhz())
             .pclk1((SYS_CLOCK_MHZ / 2).mhz())
             .pclk2(SYS_CLOCK_MHZ.mhz())
+            .adcclk(5.mhz())
             .freeze(&mut flash.acr);
 
         // take gpio instances
@@ -282,6 +290,7 @@ const APP: () = {
         let mut sleep_pin = gpioa
             .pa6
             .into_push_pull_output_with_state(&mut gpioa.crl, gpio::State::Low);
+        sleep_pin.set_speed(&mut gpioa.crl, gpio::IOPinSpeed::Mhz2); // save some power
 
         // get the system can id from the dip switches
         #[allow(unused_must_use)]
@@ -306,7 +315,6 @@ const APP: () = {
             // interate over the pins and shift values as we go
             for (shift, pin) in pins.iter().enumerate() {
                 id |= (pin.is_high().unwrap() as u16) << (shift as u16);
-                // defmt::debug!("Id so far: {:u16}", id);
             }
             pins.clear(); // just to make sure this happens.
             id
@@ -341,12 +349,19 @@ const APP: () = {
         });
 
         // create mask, we only care about the first byte of the id
-        let can_id_mask = StandardId::new(0xFF).unwrap();
+        // let can_id_mask = StandardId::new(0xFF).unwrap();
 
         // configure filters with our settings
-        let mut can_filters = can.modify_filters();
-        can_filters.enable_bank(0, Mask32::frames_with_std_id(can_id, can_id_mask));
-        drop(can_filters);
+        {
+            let can_id_mask = bxcan::ExtendedId::new(0xFF).unwrap();
+            let ext_id = bxcan::ExtendedId::new(can_id.as_raw().into()).unwrap();
+            let mut can_filters = can.modify_filters();
+            can_filters.enable_bank(
+                0,
+                Mask32::frames_with_std_id(can_id, can_id_mask.standard_id()),
+            );
+            can_filters.enable_bank(1, Mask32::frames_with_ext_id(ext_id, can_id_mask));
+        }
 
         // enable desired interrupts
         use bxcan::Interrupts;
@@ -397,27 +412,30 @@ const APP: () = {
         motor_current_limit.set_duty(0);
 
         // setup dma transfer for current sensing circuit
-        let adc = {
+        let adc_buf = {
             // split a dma channel
-            // let dma_ch = device.DMA1.split(&mut rcc.ahb).1;
+            let mut dma_ch = device.DMA1.split(&mut rcc.ahb).1;
+            dma_ch.listen(dma::Event::HalfTransfer);
+            dma_ch.listen(dma::Event::TransferComplete);
 
             // get our desired analog pin
+            let ch0 = gpioa.pa3.into_analog(&mut gpioa.crl);
 
             // setup adc for fast, continous operation.
             let mut adc = adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
 
             // set continous mode, this means the dma will run continuosly
             adc.set_continuous_mode(true);
-            adc.set_sample_time(adc::SampleTime::T_55); // NOTE: we can make this faster or slower if we want
+            adc.set_sample_time(adc::SampleTime::T_239); // NOTE: we can make this faster or slower if we want
             adc.set_align(adc::Align::Right); // TODO: Check if this is correct
 
             // get singleton buffer and start dma
-            let buf = cortex_m::singleton!(: [AdcBuf ; 2] = <[AdcBuf ; 2]>::default()).unwrap();
+            let buf = cortex_m::singleton!(: [AdcBuf ; 2] = [[0 ; ADC_BUF_LEN] ; 2]).unwrap();
 
             // start circular read
-            adc
+            let adc_dma = adc.with_dma(ch0, dma_ch);
+            adc_dma.circ_read(buf)
         };
-        let adc_pin = gpioa.pa3.into_analog(&mut gpioa.crl);
 
         // create fault and overcurrent pins
         let mut fault_pin = gpioa.pa4.into_floating_input(&mut gpioa.crl);
@@ -462,19 +480,15 @@ const APP: () = {
         cx.schedule
             .can_tx(now + CAN_VALUE_UPDATE_PD.cycles())
             .unwrap();
-        cx.schedule
-            .handle_adc(Instant::now() + 10_0000.cycles())
-            .unwrap();
 
-        defmt::info!("End of init");
+        defmt::trace!("End of init");
 
         init::LateResources {
             can_id,
             can_tx_queue,
             can_tx,
             can_rx,
-            adc,
-            adc_pin,
+            adc_buf,
             motor_high,
             motor_low,
             motor_current_limit,
@@ -495,37 +509,30 @@ const APP: () = {
         }
     }
 
-    #[task(capacity = 8, priority = 2, resources = [duty_now, current_now, can_tx_queue, can_id])]
+    #[task(capacity = 8, priority = 2, spawn = [queue_tx_frame], resources = [duty_now, current_now])]
     fn send_update(mut cx: send_update::Context) {
         defmt::trace!("Send update");
-        use can_types::IntoWithId;
 
         // get resources
-        let can_id: bxcan::Id = cx.resources.can_id.lock(|id| *id);
-        let mut can_tx_queue = cx.resources.can_tx_queue;
         let current_now = cx.resources.current_now.lock(|cn| *cn);
         let duty_now = cx.resources.duty_now.lock(|dn| *dn);
 
         // push an update frame to the queue
-        can_tx_queue
-            .lock(|q| {
-                q.push(allocate_tx_frame(
-                    can_types::OutgoingFrame::Update {
-                        current_now,
-                        duty_now,
-                    }
-                    .into_with_id(can_id),
-                ))
+        let _ = cx
+            .spawn
+            .queue_tx_frame(can_types::OutgoingFrame::Update {
+                current_now,
+                duty_now,
             })
-            .unwrap();
+            .unwrap_or_else(|_| defmt::warn!("Could not queue frame"));
 
         // schedule this task again
         // cx.schedule
-        //     .send_update(Instant::now() + CAN_VALUE_UPDATE_PD.cycles())
-        //     .unwrap();
+        // .send_update(Instant::now() + CAN_VALUE_UPDATE_PD.cycles())
+        // .unwrap();
     }
 
-    #[task(priority = 9, binds = EXTI9_5, resources = [can_id, over_current_pin, fault_pin, can_tx_queue, current_now, current_limit])]
+    #[task(priority = 9, binds = EXTI9_5, spawn=[queue_tx_frame], resources = [over_current_pin, fault_pin, current_now, current_limit])]
     fn exti9_5(mut cx: exti9_5::Context) {
         defmt::trace!("Exti95");
         use can_types::IntoWithId;
@@ -534,27 +541,24 @@ const APP: () = {
         // get resources
         let oc_pin = cx.resources.over_current_pin;
         let f_pin = cx.resources.fault_pin;
-        let can_id = cx.resources.can_id;
-        let can_tx_queue = cx.resources.can_tx_queue;
 
         // check overcurrent interrupt
         if oc_pin.check_interrupt() {
             defmt::debug!("Overcurrent interrupt");
 
             // get nesessary variables
-            let current_now = *cx.resources.current_now;
+            let current_now = cx.resources.current_now.lock(|c| *c);
             let current_limit = cx.resources.current_limit.lock(|cl| *cl) as f32;
 
             // push overcurrent frame
-            can_tx_queue
-                .push(allocate_tx_frame(
-                    OutgoingFrame::Overcurrent {
-                        current_now,
-                        current_limit,
-                    }
-                    .into_with_id(*can_id),
-                ))
-                .unwrap();
+            let _ = cx
+                .spawn
+                .queue_tx_frame(OutgoingFrame::Overcurrent {
+                    current_now,
+                    current_limit,
+                })
+                .unwrap_or_else(|_| defmt::warn!("Could not queue Frame"));
+
             oc_pin.clear_interrupt_pending_bit();
         }
 
@@ -562,12 +566,10 @@ const APP: () = {
         if f_pin.check_interrupt() {
             defmt::debug!("Motor fault interrupt");
 
-            // push error frame
-            can_tx_queue
-                .push(allocate_tx_frame(
-                    OutgoingFrame::Error(ErrorCode::MotorDriverFault.into()).into_with_id(*can_id),
-                ))
-                .unwrap();
+            let _ = cx
+                .spawn
+                .queue_tx_frame(OutgoingFrame::Error(ErrorCode::MotorDriverFault {}))
+                .unwrap_or_else(|_| defmt::warn!("Could not queue frame"));
 
             f_pin.clear_interrupt_pending_bit();
         }
@@ -646,29 +648,34 @@ const APP: () = {
             .unwrap();
     }
 
-    // #[task(priority = 5, binds = ADC1_2, resources=[adc_buf, current_now])]
-    #[task(priority = 5, schedule=[handle_adc], resources=[adc, adc_pin, current_now])]
-    fn handle_adc(mut cx: handle_adc::Context) {
+    #[task(priority = 10, binds = DMA1_CHANNEL1, resources=[adc_buf, current_now])]
+    fn handle_adc(cx: handle_adc::Context) {
         defmt::trace!("Reading adc");
-        // let adc_buf = cx.resources.adc_buf;
-        //
-        let val: u16 = nb::block!(cx.resources.adc.read(cx.resources.adc_pin)).unwrap();
+
+        let mut val: f32 = 0.0;
+
+        match cx.resources.adc_buf.peek(|b, _| {
+            val = b.iter().sum::<u16>() as f32 / ADC_BUF_LEN as f32;
+        }) {
+            Ok(_) => {}
+            Err(_) => {
+                defmt::warn!("DMA overrun");
+                // let adc = unsafe { &*stm32f1xx_hal::pac::ADC1::ptr() };
+                return;
+            }
+        }
 
         defmt::trace!("Actually reading dma");
+
         // We use floats here because the accuracy matters to an extent
-        let volts = (val as f32) / 1000.0;
+        let volts = val / 1000.0;
 
         // this comes from the data sheet
         let current: f32 = ((volts - V_OFF) / (R_SENSE_VAL * AMP_GAIN)) / CURRENT_EXTERNAL_SCALE;
 
         defmt::info!("Motor current: {=f32}", current);
 
-        cx.resources.current_now.lock(|c| *c = current);
-
-        cx.schedule
-            .handle_adc(Instant::now() + MOTOR_UPDATE_PD.cycles())
-            .unwrap();
-        // defmt::info!("Done reading adc");
+        *cx.resources.current_now = current;
 
         // NOTE:
         // we should really do something that takes the vref into account
@@ -677,7 +684,22 @@ const APP: () = {
         // for now we will just do it the dumb way
     }
 
-    #[task(priority = 5, capacity = 16, resources=[can_tx_queue, last_can_rx, inverted, current_limit, setpoint, last_heartbeat, idle_mode] )]
+    #[task(priority = 5, capacity = 32, resources=[can_tx_queue, can_id])]
+    fn queue_tx_frame(cx: queue_tx_frame::Context, frame: can_types::OutgoingFrame) {
+        use can_types::IntoWithId;
+
+        let mut queue = cx.resources.can_tx_queue;
+        let id = *cx.resources.can_id;
+
+        match queue.push(allocate_tx_frame(frame.into_with_id(id))) {
+            Ok(..) => {}
+            Err(_) => {
+                defmt::warn!("Can Tx queue is out of space");
+            }
+        }
+    }
+
+    #[task(priority = 5, capacity = 32, resources=[can_tx_queue, last_can_rx, inverted, current_limit, setpoint, last_heartbeat, idle_mode] )]
     fn handle_rx_frame(mut cx: handle_rx_frame::Context, frame: Frame) {
         use can_types::IncomingFrame;
         use can_types::IncomingFrame::*;
@@ -764,7 +786,7 @@ const APP: () = {
         }
 
         // queue an update frame
-        // cx.spawn.send_update().unwrap();
+        cx.spawn.send_update().unwrap();
 
         tx_queue.lock(|tx_queue| {
             while let Some(frame) = tx_queue.peek() {

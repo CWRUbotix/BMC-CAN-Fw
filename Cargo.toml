@@ -24,6 +24,8 @@ logging = ["defmt-trace"]
 defmt-info = []
 defmt-debug = []
 defmt-trace = []
+defmt-error = []
+defmt-warn = []
 
 default = [
     "heartbeat"
