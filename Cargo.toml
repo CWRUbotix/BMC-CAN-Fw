@@ -6,20 +6,16 @@ edition = "2018"
 readme = "README.md"
 
 [dependencies]
-cortex-m = "0.6.0"
-cortex-m-rt = "0.6.10"
-cortex-m-rtic = "0.5.5"
-stm32f1 = "0.11.0"
-embedded-hal = "0.2.3"
+cortex-m = "0.7.2"
+cortex-m-rt = "0.6.13"
+cortex-m-rtic = "0.5.6"
+stm32f1 = "0.13.0"
+embedded-hal = "0.2.4"
 nb = "1.0.0"
-volatile = "0.3.0"
-heapless = ""
-bxcan = "0.4"
-defmt = "0.1"
-defmt-rtt = "0.1"
+heapless = "0.6.1"
+defmt = "0.2.0"
+defmt-rtt = "0.2.0"
 bitfield = "0.13.2"
-# bxcan = "0.4.0"
-# asm-delay = "0.9"
 
 [features]
 heartbeat = []
@@ -33,13 +29,18 @@ default = [
     "heartbeat"
 ]
 
+[dependencies.bxcan]
+git =  "https://github.com/stm32-rs/bxcan"
+branch = "master"
+
 [dependencies.stm32f1xx-hal]
-version = ""
+git = "https://github.com/stm32-rs/stm32f1xx-hal"
+branch = "master"
 features = ["stm32f103", "rt", "stm32-usbd", "has-can", "doc"]
 
+
 [patch.crates-io]
-stm32f1xx-hal = { git = "https://github.com/timokroeger/stm32f1xx-hal", branch="bxcan", features = ["stm32f103", "rt", "stm32-usbd", "has-can"] }
-# bxcan = {git = "https://github.com/stm32-rs/bxcan" }
+bxcan = {git = "https://github.com/stm32-rs/bxcan", branch = "master"}
 
 [[bin]]
 name = "bmc-can-rs"

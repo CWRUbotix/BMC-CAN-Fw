@@ -23,19 +23,19 @@ pub enum FrameConversionError {
 }
 
 impl Format for FrameConversionError {
-    fn format(&self, f: &mut defmt::Formatter) {
+    fn format(&self, f: defmt::Formatter) {
         use FrameConversionError::*;
         match self {
             FrameType => {
                 defmt::write!(f, "Frame type is incorrect (remote vs data frames)");
             }
             InvalidFrame(s) => {
-                defmt::write!(f, "Invalid Frame: {:str}", s);
+                defmt::write!(f, "Invalid Frame: {=str}", s);
             }
             TooShort { minimum, actual } => {
                 defmt::write!(
                     f,
-                    "Data frame too short. Recieved dlc = {:u8}, requires length {:u8}",
+                    "Data frame too short. Recieved dlc = {=u8}, requires length {=u8}",
                     actual,
                     minimum
                 );
@@ -44,7 +44,7 @@ impl Format for FrameConversionError {
                 defmt::write!(f, "Invalid id format");
             }
             InvalidCommand { cmd } => {
-                defmt::write!(f, "Invalid command {:u16}", cmd);
+                defmt::write!(f, "Invalid command {=u16}", cmd);
             }
         }
     }

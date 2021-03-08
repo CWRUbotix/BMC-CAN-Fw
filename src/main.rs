@@ -121,13 +121,6 @@ const CAN_VALUE_UPDATE_PD: u32 = times_per_second(20);
 /// This subsequently controls how fast the leds will flash
 const LED_UPDATE_PD: u32 = times_per_second(8);
 
-/// Defmt timestamp function
-/// Used by defmt logger
-#[defmt::timestamp]
-fn timestamp() -> u64 {
-    DWT::get_cycle_count() as u64
-}
-
 heapless::pool! {
     /// can frame pool definition.
     /// Allows us to allocate frames similar to allocating on the heap of a normal system
@@ -142,7 +135,9 @@ fn allocate_tx_frame(frame: Frame) -> Box<CanFramePool, heapless::pool::Init> {
     b.init(PriorityFrame(frame))
 }
 
-#[app(device=stm32f1::stm32f103, peripherals = true, monotonic=rtic::cyccnt::CYCCNT)]
+type AdcBuf = [u16; 16];
+
+#[app(device=stm32f1xx_hal::stm32, peripherals = true, monotonic=rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
         /// The time we last recieved an can frame from the bus
@@ -172,7 +167,9 @@ const APP: () = {
         /// circular adc buffer. This allows us to coninuously read from the
         /// current sensing circuit without interruption. Data will be stored in
         /// two "Halves" of the buffer. One will be filled while the other is being processed.
-        adc_buf: dma::CircBuffer<u16, AdcDma>,
+        // adc_buf: dma::CircBuffer<AdcBuf, AdcDma>,
+        adc: adc::Adc<pac::ADC1>,
+        adc_pin: gpio::gpioa::PA3<gpio::Analog>,
 
         /// Motor high pwm channel. Controls forward duty cycle.
         motor_high: MotorHighChannel,
@@ -240,7 +237,7 @@ const APP: () = {
 
     /// Initialization function
     /// Here we initialize hardware peripherals and setup software variables
-    #[init(schedule=[led_update, motor_update, can_tx ])]
+    #[init(schedule=[led_update, motor_update, can_tx, handle_adc ])]
     fn init(cx: init::Context) -> init::LateResources {
         // Create tx queue
         let can_tx_queue = BinaryHeap::new();
@@ -315,7 +312,7 @@ const APP: () = {
             id
         };
 
-        defmt::info!("Can Id: {:u16}", can_id);
+        defmt::info!("Can Id: {=u16}", can_id);
 
         // wrap the can id
         let can_id = StandardId::new(can_id).unwrap();
@@ -400,27 +397,27 @@ const APP: () = {
         motor_current_limit.set_duty(0);
 
         // setup dma transfer for current sensing circuit
-        let adc_buf = {
+        let adc = {
             // split a dma channel
-            let dma_ch = device.DMA1.split(&mut rcc.ahb).1;
+            // let dma_ch = device.DMA1.split(&mut rcc.ahb).1;
 
             // get our desired analog pin
-            let ch0 = gpioa.pa3.into_analog(&mut gpioa.crl);
 
             // setup adc for fast, continous operation.
             let mut adc = adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
 
             // set continous mode, this means the dma will run continuosly
             adc.set_continuous_mode(true);
-            adc.set_sample_time(adc::SampleTime::T_28); // NOTE: we can make this faster or slower if we want
+            adc.set_sample_time(adc::SampleTime::T_55); // NOTE: we can make this faster or slower if we want
             adc.set_align(adc::Align::Right); // TODO: Check if this is correct
 
             // get singleton buffer and start dma
-            let buf = cortex_m::singleton!(: [u16; 2] = [0; 2]).unwrap();
+            let buf = cortex_m::singleton!(: [AdcBuf ; 2] = <[AdcBuf ; 2]>::default()).unwrap();
 
             // start circular read
-            adc.with_dma(ch0, dma_ch).circ_read(buf)
+            adc
         };
+        let adc_pin = gpioa.pa3.into_analog(&mut gpioa.crl);
 
         // create fault and overcurrent pins
         let mut fault_pin = gpioa.pa4.into_floating_input(&mut gpioa.crl);
@@ -465,6 +462,9 @@ const APP: () = {
         cx.schedule
             .can_tx(now + CAN_VALUE_UPDATE_PD.cycles())
             .unwrap();
+        cx.schedule
+            .handle_adc(Instant::now() + 10_0000.cycles())
+            .unwrap();
 
         defmt::info!("End of init");
 
@@ -473,7 +473,8 @@ const APP: () = {
             can_tx_queue,
             can_tx,
             can_rx,
-            adc_buf,
+            adc,
+            adc_pin,
             motor_high,
             motor_low,
             motor_current_limit,
@@ -490,7 +491,7 @@ const APP: () = {
     fn idle(_cx: idle::Context) -> ! {
         loop {
             cortex_m::asm::nop();
-            cortex_m::asm::wfi();
+            // cortex_m::asm::wfi();
         }
     }
 
@@ -645,27 +646,29 @@ const APP: () = {
             .unwrap();
     }
 
-    #[task(priority = 5, binds = DMA1_CHANNEL1, resources=[adc_buf, current_now])]
+    // #[task(priority = 5, binds = ADC1_2, resources=[adc_buf, current_now])]
+    #[task(priority = 5, schedule=[handle_adc], resources=[adc, adc_pin, current_now])]
     fn handle_adc(mut cx: handle_adc::Context) {
         defmt::trace!("Reading adc");
-        let adc_buf = cx.resources.adc_buf;
-        let mut adc_val = 0_u16;
-        adc_buf
-            .peek(|buf, _| {
-                adc_val = *buf;
-            })
-            .unwrap();
+        // let adc_buf = cx.resources.adc_buf;
+        //
+        let val: u16 = nb::block!(cx.resources.adc.read(cx.resources.adc_pin)).unwrap();
 
+        defmt::trace!("Actually reading dma");
         // We use floats here because the accuracy matters to an extent
-        let volts = (adc_val as f32) / 1000.0;
+        let volts = (val as f32) / 1000.0;
 
         // this comes from the data sheet
         let current: f32 = ((volts - V_OFF) / (R_SENSE_VAL * AMP_GAIN)) / CURRENT_EXTERNAL_SCALE;
 
-        defmt::info!("Motor current: {:f32}", current);
+        defmt::info!("Motor current: {=f32}", current);
 
         cx.resources.current_now.lock(|c| *c = current);
-        defmt::info!("Done reading adc");
+
+        cx.schedule
+            .handle_adc(Instant::now() + MOTOR_UPDATE_PD.cycles())
+            .unwrap();
+        // defmt::info!("Done reading adc");
 
         // NOTE:
         // we should really do something that takes the vref into account
@@ -684,15 +687,15 @@ const APP: () = {
 
         match IncomingFrame::try_from(frame) {
             Ok(Setpoint(setpoint)) => {
-                defmt::info!("Setting setpoint to {:i16}", setpoint);
+                defmt::info!("Setting setpoint to {=i16}", setpoint);
                 cx.resources.setpoint.lock(|s| *s = setpoint);
             }
             Ok(SetCurrentLimit(limit)) => {
-                defmt::info!("Setting current limit to {:u8} amps", limit);
+                defmt::info!("Setting current limit to {=u8} amps", limit);
                 cx.resources.current_limit.lock(|cl| *cl = limit);
             }
             Ok(Invert(inv)) => {
-                defmt::info!("Setting motor inversion to {:bool}", inv);
+                defmt::info!("Setting motor inversion to {=bool}", inv);
                 cx.resources.inverted.lock(|inverted| *inverted = inv);
             }
             #[cfg(feature = "heartbeat")]
@@ -824,8 +827,8 @@ fn my_panic(info: &core::panic::PanicInfo) -> ! {
     use defmt::Debug2Format;
 
     defmt::error!(
-        "Panic: \"{:?}\" \nin file {:str} at line {:u32}",
-        Debug2Format::<consts::U1024>(info.message().unwrap()),
+        "Panic: \"{:?}\" \nin file {=str} at line {=u32}",
+        Debug2Format(info.message().unwrap()),
         info.location().unwrap().file(),
         info.location().unwrap().line()
     );
